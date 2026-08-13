@@ -1,0 +1,33 @@
+name: blue_moon_side_docking_reference
+random_seed: 3103
+duration_s: 1800.0
+step_s: 1.0
+fidelity: cw
+orbit:
+  altitude_m: 400000.0
+chaser:
+  name: Orion
+  mass_kg: 26500.0
+  inertia_kg_m2: [90000.0, 85000.0, 70000.0]
+  length_m: 8.0
+  diameter_m: 5.0
+  max_translation_thrust_n: 220.0
+  specific_impulse_s: 300.0
+  assumption_confidence: placeholder
+target:
+  name: Blue Moon Mark 2 test lander
+  mass_kg: 35000.0
+  inertia_kg_m2: [320000.0, 320000.0, 180000.0]
+  length_m: 16.0
+  diameter_m: 7.0
+  max_translation_thrust_n: 400.0
+  specific_impulse_s: 330.0
+  assumption_confidence: placeholder
+docking:
+  geometry: side
+  capture_distance_m: 0.15
+  max_closing_rate_m_s: 0.08
+  max_lateral_offset_m: 0.10
+  max_angular_error_deg: 2.0
+  docked_controller: orion
+initial_relative_state_m_mps: [0.0, -1000.0, 0.0, 0.0, 0.45, 0.0]

@@ -1,0 +1,33 @@
+name: starship_nose_to_nose_reference
+random_seed: 3307
+duration_s: 1800.0
+step_s: 1.0
+fidelity: cw
+orbit:
+  altitude_m: 400000.0
+chaser:
+  name: Orion
+  mass_kg: 26500.0
+  inertia_kg_m2: [90000.0, 85000.0, 70000.0]
+  length_m: 8.0
+  diameter_m: 5.0
+  max_translation_thrust_n: 220.0
+  specific_impulse_s: 300.0
+  assumption_confidence: placeholder
+target:
+  name: Starship Version 3 test article
+  mass_kg: 120000.0
+  inertia_kg_m2: [28000000.0, 28000000.0, 4900000.0]
+  length_m: 52.0
+  diameter_m: 9.0
+  max_translation_thrust_n: 2000.0
+  specific_impulse_s: 330.0
+  assumption_confidence: placeholder
+docking:
+  geometry: nose_to_nose
+  capture_distance_m: 0.15
+  max_closing_rate_m_s: 0.06
+  max_lateral_offset_m: 0.08
+  max_angular_error_deg: 1.5
+  docked_controller: target
+initial_relative_state_m_mps: [0.0, -1500.0, 0.0, 0.0, 0.55, 0.0]

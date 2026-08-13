@@ -1,0 +1,20 @@
+source_date: 2026-07-15
+retrieved_date: 2026-08-04
+primary_source: https://www.nasa.gov/directorates/esdmd/artemis-campaign-development-division/human-landing-system-program/how-nasas-artemis-iii-lander-test-will-pave-way-for-moon-landings/
+facts:
+  mission_environment: low Earth orbit
+  mission_year: 2027
+  chaser_vehicle: Orion
+  blue_moon:
+    docking_geometry: side
+    docked_controller: Orion
+    crew_entry_possible: true
+  starship:
+    version: Version 3 test article
+    public_length_m: 52
+    docking_geometry: nose-to-nose
+    docked_controller: Starship test article
+    crew_entry_possible: false
+notes:
+  - Mission plans remain subject to refinement.
+  - Public facts do not provide complete mass properties, thruster maps, or flight rules.

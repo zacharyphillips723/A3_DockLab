@@ -1,0 +1,9 @@
+assumption_id,area,parameter,default_value,unit,confidence,rationale,validation_path
+A-001,mission,reference orbit altitude,400000,m,project assumption,Representative LEO demonstration altitude,Update from future public mission data
+A-002,vehicle,Orion mass,26500,kg,placeholder,Order-of-magnitude integrated spacecraft estimate,Replace with current public mass properties
+A-003,vehicle,Blue Moon test article mass,35000,kg,placeholder,Unpublished public test-article mass,Perform sensitivity sweep
+A-004,vehicle,Starship test article mass,120000,kg,placeholder,Unpublished public test-article mass,Perform sensitivity sweep
+A-005,docking,Blue Moon closing-rate limit,0.08,m/s,placeholder,Demonstration value not NASA flight rule,Replace only from released interface data
+A-006,docking,Starship closing-rate limit,0.06,m/s,placeholder,Reduced for high inertia ratio,Replace only from released interface data
+A-007,sensors,relative navigation 1-sigma range error,0.05,m,placeholder,Initial synthetic sensor model,Calibrate against public docking sensor performance
+A-008,thrusters,Orion max translational thrust,220,N,placeholder,Control-authority study value,Replace with public configuration data
