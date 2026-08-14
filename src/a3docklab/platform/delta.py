@@ -7,6 +7,8 @@ injection. Importing this module does not require PySpark or a Databricks SDK.
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -36,6 +38,84 @@ class DeltaCatalog(Protocol):
         columns: list[str] | None = None,
         order_by: tuple[str, ...] = (),
     ) -> pd.DataFrame: ...
+
+
+class SqlQueryExecutor(Protocol):
+    def execute(self, query: str, parameters: Mapping[str, object]) -> pd.DataFrame: ...
+
+
+class DatabricksSqlExecutor:
+    """PEP 249 query executor using Databricks App OAuth credentials."""
+
+    def __init__(self, server_hostname: str, warehouse_id: str) -> None:
+        self.server_hostname = server_hostname.removeprefix("https://").rstrip("/")
+        self.warehouse_id = warehouse_id
+
+    def execute(self, query: str, parameters: Mapping[str, object]) -> pd.DataFrame:
+        try:
+            from databricks.sdk.core import Config  # type: ignore[import-not-found]
+
+            from databricks import sql  # type: ignore[attr-defined]
+        except ImportError as exc:
+            raise RuntimeError("SQL replay requires the 'databricks' optional dependency") from exc
+        config = Config()
+        with sql.connect(
+            server_hostname=self.server_hostname,
+            http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
+            credentials_provider=lambda: config.authenticate,
+        ) as connection, connection.cursor() as cursor:
+            cursor.execute(query, parameters=parameters)
+            return cast(pd.DataFrame, cursor.fetchall_arrow().to_pandas())
+
+
+class SqlWarehouseDeltaCatalog:
+    """Read-only Delta catalog backed by parameterized SQL Warehouse queries."""
+
+    _identifier = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+    def __init__(self, executor: SqlQueryExecutor) -> None:
+        self.executor = executor
+
+    @classmethod
+    def _quote_identifier(cls, identifier: str) -> str:
+        segments = identifier.split(".")
+        if not segments or any(cls._identifier.fullmatch(segment) is None for segment in segments):
+            raise ValueError(f"Unsafe SQL identifier {identifier!r}")
+        return ".".join(f"`{segment}`" for segment in segments)
+
+    def append_table(self, table: str, frame: pd.DataFrame) -> None:
+        raise NotImplementedError("SQL Warehouse replay catalog is read-only")
+
+    def read_table(
+        self,
+        table: str,
+        *,
+        filters: tuple[TableFilter, ...] = (),
+        columns: list[str] | None = None,
+        order_by: tuple[str, ...] = (),
+    ) -> pd.DataFrame:
+        projection = (
+            "*"
+            if columns is None
+            else ", ".join(self._quote_identifier(column) for column in columns)
+        )
+        query = f"SELECT {projection} FROM {self._quote_identifier(table)}"
+        predicates: list[str] = []
+        parameters: dict[str, object] = {}
+        operators = {"eq": "=", "ge": ">=", "le": "<="}
+        for index, item in enumerate(filters):
+            if item.operator not in operators:
+                raise ValueError(f"Unsupported filter operator {item.operator!r}")
+            parameter = f"filter_{index}"
+            predicates.append(
+                f"{self._quote_identifier(item.column)} {operators[item.operator]} :{parameter}"
+            )
+            parameters[parameter] = item.value
+        if predicates:
+            query += " WHERE " + " AND ".join(predicates)
+        if order_by:
+            query += " ORDER BY " + ", ".join(self._quote_identifier(column) for column in order_by)
+        return self.executor.execute(query, parameters)
 
 
 class SparkDeltaCatalog:

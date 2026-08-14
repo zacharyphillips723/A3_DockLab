@@ -22,6 +22,7 @@ def test_databricks_bundle_declares_targets_and_platform_resources() -> None:
     assert "a3docklab" in resources["experiments"]
     assert app["source_code_path"] == ".."
     assert {item["name"] for item in app["resources"]} == {
+        "sql_warehouse",
         "simulation_job",
         "monte_carlo_job",
         "experiment",

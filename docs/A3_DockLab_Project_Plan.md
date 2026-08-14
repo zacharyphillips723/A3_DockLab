@@ -1565,8 +1565,10 @@ backend, partition count, and child-seed strategy. The next increment is the
 distributed job/MLflow orchestration layer and Lakebase application state. The
 Databricks bundle foundation now declares development/production targets, the
 replay App, serverless simulation and Monte Carlo Jobs, an MLflow experiment,
-and secret-free deployment variables. Completing SQL-backed App replay and
-Lakebase application state is the remaining platform work in this phase.
+and secret-free deployment variables. SQL-backed App replay now uses the bound
+warehouse with runtime OAuth, parameterized predicates, validated identifiers,
+and local filesystem fallback. Lakebase application state is the remaining
+platform work in this phase.
 - MLflow experiment tracking for simulation and later model-training runs.
 - Lakebase-backed annotations, saved views, review state, and comparisons.
 

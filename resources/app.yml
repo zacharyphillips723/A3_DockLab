@@ -18,6 +18,10 @@ resources:
           - name: A3DOCKLAB_BUNDLE_ROOT
             value: /tmp/a3docklab/bundles
       resources:
+        - name: sql_warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
         - name: simulation_job
           job:
             id: ${resources.jobs.simulation.id}

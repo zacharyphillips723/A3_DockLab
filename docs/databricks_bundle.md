@@ -43,8 +43,9 @@ URLs, warehouse IDs, and service-principal identifiers must not be committed.
 
 ## Current boundary
 
-Jobs publish directly through the injected Spark/Delta catalog. The App is
-deployable and receives the catalog, schema, and warehouse identifiers plus
-resource bindings for both Jobs and MLflow. Its current replay mode reads local
-bundles; the next adapter increment will query the same Delta contract through
-the App's SQL warehouse binding and add Lakebase-backed mutable review state.
+Jobs publish directly through the injected Spark/Delta catalog. The App receives
+catalog, schema, and warehouse identifiers plus resource bindings for the SQL
+warehouse, both Jobs, and MLflow. In Databricks it uses OAuth-backed,
+parameterized SQL Warehouse queries against the same Delta replay contract; in
+local development it falls back to filesystem bundles. Lakebase-backed mutable
+review state is the next platform increment.
