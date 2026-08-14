@@ -1562,7 +1562,11 @@ storage and replay adapters now share the local query contract through an
 injected catalog, with a Spark implementation for Databricks and an in-memory
 contract-test implementation. Ensemble manifests also declare their execution
 backend, partition count, and child-seed strategy. The next increment is the
-distributed job/MLflow orchestration layer and Lakebase application state.
+distributed job/MLflow orchestration layer and Lakebase application state. The
+Databricks bundle foundation now declares development/production targets, the
+replay App, serverless simulation and Monte Carlo Jobs, an MLflow experiment,
+and secret-free deployment variables. Completing SQL-backed App replay and
+Lakebase application state is the remaining platform work in this phase.
 - MLflow experiment tracking for simulation and later model-training runs.
 - Lakebase-backed annotations, saved views, review state, and comparisons.
 

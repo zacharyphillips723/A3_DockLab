@@ -1,4 +1,4 @@
-.PHONY: install test lint typecheck run-blue run-starship
+.PHONY: install test lint typecheck run-blue run-starship bundle-validate bundle-deploy
 
 install:
 	python -m pip install -e ".[dev]"
@@ -17,3 +17,9 @@ run-blue:
 
 run-starship:
 	python -m a3docklab.cli simulate configs/scenarios/starship_nose.yaml --output runs
+
+bundle-validate:
+	databricks bundle validate -t dev
+
+bundle-deploy:
+	databricks bundle deploy -t dev

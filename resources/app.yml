@@ -1,0 +1,32 @@
+resources:
+  apps:
+    mission_replay:
+      name: a3-docklab-${bundle.target}
+      description: A3 DockLab mission replay and risk-analysis application.
+      source_code_path: ..
+      config:
+        command:
+          - python
+          - app.py
+        env:
+          - name: A3DOCKLAB_CATALOG
+            value: ${var.catalog}
+          - name: A3DOCKLAB_SCHEMA
+            value: ${var.schema}
+          - name: A3DOCKLAB_WAREHOUSE_ID
+            value: ${var.warehouse_id}
+          - name: A3DOCKLAB_BUNDLE_ROOT
+            value: /tmp/a3docklab/bundles
+      resources:
+        - name: simulation_job
+          job:
+            id: ${resources.jobs.simulation.id}
+            permission: CAN_MANAGE_RUN
+        - name: monte_carlo_job
+          job:
+            id: ${resources.jobs.monte_carlo.id}
+            permission: CAN_MANAGE_RUN
+        - name: experiment
+          experiment:
+            experiment_id: ${resources.experiments.a3docklab.id}
+            permission: CAN_EDIT
