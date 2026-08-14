@@ -1,0 +1,23 @@
+schema_version: "1.1"
+sample_count: 3
+random_seed: 73031
+parameters:
+  - name: initial_x_offset_m
+    mean: 0.0
+    standard_deviation: 0.5
+    minimum: -1.5
+    maximum: 1.5
+  - name: chaser_thrust_scale
+    mean: 1.0
+    standard_deviation: 0.02
+    minimum: 0.94
+    maximum: 1.06
+correlation_matrix:
+  - [1.0, 0.0]
+  - [0.0, 1.0]
+faults:
+  - name: navigation_drift
+    probability: 1.0
+    severity: 0.001
+    start_fraction: 0.5
+    duration_fraction: 0.25

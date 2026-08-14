@@ -1428,147 +1428,179 @@ These values should be swept rather than trusted. The sensitivity report should 
 
 # Implementation Roadmap
 
-## Milestone 0: Project foundation
+The original milestone sequence has been rebaselined after completion of the project foundation, controlled CW rendezvous, multi-rate telemetry, and the first replay application. The completed baseline is retained below, followed by four forward phases ordered by engineering dependency rather than interface visibility.
+
+## Completed baseline
+
+The implemented baseline includes:
+
+- Repository packaging, CI, contribution rules, source tracking, and assumption manifests.
+- Validated scenario configuration with explicit SI units and LVLH frame conventions.
+- Analytic CW propagation, targeting, guarded hold points, controlled proximity operations, safety monitoring, abort responses, and propellant accounting.
+- Deterministic Blue Moon and Starship scenario completion.
+- Versioned multi-rate truth, navigation, actuation, communications, event, and fault-label bundles.
+- Local Parquet and JSON Lines storage, Phase 2 compatibility, and storage-independent replay queries.
+- Plotly/Dash mission replay with time control, event jumps, fault evidence, and run comparison.
+
+The baseline is complete when CI passes, both configured missions complete nominally, unsafe initial conditions abort deterministically, fixed seeds reproduce telemetry, and a complete run replays without loading an ensemble into browser memory. These conditions are currently satisfied.
+
+## Forward Phase A: Physics credibility
+
+Purpose: establish the physical validity envelope required before adding more sophisticated estimation, contact, Monte Carlo, or anomaly models.
 
 Deliverables:
 
-- Repository, packaging, CI, contribution rules.
-- Assumption register.
-- SI unit and frame policy.
-- Scenario configuration schema.
-- Current mission-source references.
+- Numerical CW propagation and analytic-versus-numerical comparison.
+- ECI/LVLH state transforms with round-trip and sign-convention tests.
+- Nonlinear inertial two-body truth propagation for target and chaser.
+- CW-versus-two-body comparison across separation, duration, and integration tolerance.
+- Reproducible validity-envelope reports with machine-readable results.
+- Quaternion attitude kinematics and rigid-body rotational dynamics.
+- Docking-port frame transforms and alignment metrics.
+- Attitude control, force/torque allocation, combined center of mass, and full inertia tensor.
+- Simplified event-based soft capture and documented momentum behavior.
+
+Current progress: the translational validity-envelope work, quaternion
+kinematics, torque-driven principal-axis rigid-body propagation, docking-port
+transforms, alignment/clocking metrics, and saturated quaternion-error PD
+control are implemented and tested. Port geometry is explicit in both scenario
+files. Attitude and angular-rate states now propagate through controlled
+rendezvous and appear in versioned telemetry. Terminal capture uses port-relative
+axial, lateral, normal-alignment, and clocking guards; persistent misalignment
+commands deterministic retreat. Enforcing the declared lateral limits exposed
+and corrected an under-tuned reference lateral controller. Actuator geometry and
+force/torque allocation are now implemented with a symmetric 24-jet engineering
+layout, bounded nonnegative duty commands, per-jet health, minimum-impulse pulse
+accumulation, individual on-time propellant accounting, and residual telemetry.
+Combined center of mass, rotated full inertia tensors, parallel-axis translation,
+principal properties, post-capture telemetry, and side-docking force/moment-arm
+coupling are implemented and tested. The final core gate is also complete: a
+qualitative compliant-contact law is separated from a perfectly inelastic latch
+projection that conserves total linear and angular momentum and reports energy
+dissipation. Phase A Physics Credibility is therefore closed. J2/drag sensitivity
+and replacement of placeholders remain optional improvements, not blockers for
+Forward Phase B.
 
 Exit criteria:
 
-- Both sample configurations validate.
-- CI runs unit tests.
-- Every vehicle value has a confidence label.
+- Analytic and numerical CW solutions agree within declared tolerances.
+- ECI/LVLH transforms round-trip and preserve the documented frame convention.
+- Two-body convergence is demonstrated under tighter solver tolerances.
+- CW error is characterized by initial separation and propagation duration.
+- Quaternion norm remains bounded and attitude transforms agree with rotation matrices.
+- Side-docking translation/rotation coupling appears in the Blue Moon scenario.
+- Contact-model limitations and momentum behavior are explicitly documented.
 
-## Milestone 1: CW rendezvous sandbox
+## Forward Phase B: Combined vehicle and handoff
+
+Purpose: model the mission-specific change from independent vehicles to a docked stack and transfer control authority safely.
 
 Deliverables:
 
-- CW propagation and state-transition matrix.
-- Two-point targeting.
-- Hold-point state machine.
-- Basic 3D relative trajectory.
-- Fuel estimate using ideal impulses.
+- Orion-controlled Blue Moon combined stack and target-controlled Starship combined stack.
+- Authority-token state machine with readiness, quiet-period, transfer, acknowledgement, and rollback states.
+- State, covariance, clock, phase, and health-data exchange.
+- Shadow-control comparison before transfer.
+- Command-continuity monitoring and configurable discontinuity limits.
+- Stale data, frame mismatch, duplicated authority, lost authority, and actuator-health handoff faults.
+- Unambiguous controller-authority and command-source telemetry.
+
+Current progress: the Phase B foundation is implemented. A single-owner
+authority token now advances through readiness, quiet period, transfer pending,
+acknowledgement, and active states after the capture latch. Readiness loss,
+acknowledgement timeout, or excessive shadow-command discontinuity rolls back
+without changing the original owner. Blue Moon completes with Orion authority;
+Starship transfers authority to the target. Schema 2.0 truth telemetry records
+the protocol state, unique owner, command source, target owner, readiness,
+transition reason, and shadow-command delta. Schema 2.1 adds a versioned
+state/covariance/clock/phase/frame/health exchange packet with strict validation.
+Stale data, frame mismatch, lost acknowledgement, and unhealthy actuators produce
+deterministic rollback while Orion retains authority. Schema 2.2 adds independent
+Orion/target shadow stack wrenches, equivalent-force command continuity checks,
+and external exactly-one-owner observations. Shadow mismatch, duplicated
+authority, and lost authority produce detectable evidence followed by rollback
+and recovery. Schema 2.3 completes the phase with sustained selected-owner stack
+control through owner-specific actuator layouts, combined-COM force/torque
+response, separate propellant attribution, and rollback after an active-owner
+failure. Phase B exit criteria are satisfied; Forward Phase C is the next gate.
 
 Exit criteria:
 
-- Analytic and numerical CW solutions agree within tolerance.
-- Targeting reaches commanded terminal position.
-- Frame and sign tests pass.
+- No command discontinuity exceeds its configured limit.
+- Rollback succeeds for stale, inconsistent, or unacknowledged handoff data.
+- Exactly one controller owns authority outside explicitly modeled transition states.
+- Blue Moon and Starship scenarios demonstrate their correct post-docking authority.
 
-## Milestone 2: Controlled proximity operations
+## Forward Phase C: Estimation, Monte Carlo, and Lakehouse
+
+Purpose: quantify uncertainty and risk at scale using platform-independent domain contracts with Databricks adapters at the boundary.
 
 Deliverables:
 
-- Translation controller.
-- Range-dependent closing profile.
-- Thruster saturation and minimum impulse bit.
-- Keep-out zone and corridor monitoring.
-- Abort maneuvers.
+- Extended Kalman filter with covariance, innovation, and normalized-innovation telemetry.
+- Remaining sensor, communication, actuator, alignment, and telemetry-loss faults.
+- Reproducible random streams, parameter distributions, correlated sampling, and ensemble manifests.
+- Local and distributed Monte Carlo runners with convergence and sensitivity reporting.
+- Docking, abort, fuel, separation, alignment, saturation, handoff, and fault-detection risk metrics.
+- Delta-backed `RunStorage` and `ReplayStore` adapters.
+
+Current progress: the Phase C estimator foundation is implemented. A six-state
+CW extended Kalman filter now replaces interpolated noisy measurements in the
+navigation-estimate stream. It predicts at the configured estimator rate,
+updates only when a relative-navigation measurement arrives, uses explicit
+white-acceleration process covariance and Joseph-form measurement updates, and
+emits per-axis uncertainty, covariance trace, six-component innovation,
+normalized innovation squared, consistency threshold, and measurement-used
+state. Schema 3.0 establishes these Lakehouse-facing estimator semantics.
+Reproducible bounded/correlated parameter sampling, deterministic child seeds,
+local ensemble execution, stable manifests, running convergence estimates, and
+docking/abort/fuel/alignment/handoff risk summaries are also implemented. The
+ensemble contract now also includes deterministic Bernoulli fault sampling,
+fault windows, nominal-versus-faulted run labels, and estimator RMSE, normalized
+innovation consistency, and covariance-growth tail metrics. Delta-backed run
+storage and replay adapters now share the local query contract through an
+injected catalog, with a Spark implementation for Databricks and an in-memory
+contract-test implementation. Ensemble manifests also declare their execution
+backend, partition count, and child-seed strategy. The next increment is the
+distributed job/MLflow orchestration layer and Lakebase application state.
+- MLflow experiment tracking for simulation and later model-training runs.
+- Lakebase-backed annotations, saved views, review state, and comparisons.
 
 Exit criteria:
 
-- Nominal docking succeeds for both geometries.
-- Unsafe initial conditions trigger deterministic aborts.
-- No corridor entry occurs without phase authorization.
+- Covariance remains symmetric positive semidefinite within tolerance.
+- Innovation consistency is evaluated against expected distributions.
+- Fixed seed sets reproduce run identities and aggregate statistics.
+- Risk summaries converge as ensemble size grows.
+- Local and Databricks adapters pass the same contract tests.
+- Simulation and application domain code contain no direct Databricks dependency.
 
-## Milestone 3: Nonlinear truth model
+## Forward Phase D: Anomaly benchmark and operational explainability
+
+Purpose: compare anomaly methods fairly and present evidence suitable for operator investigation without claiming causal diagnosis.
 
 Deliverables:
 
-- Inertial two-body propagation.
-- LVLH transforms.
-- Optional J2 and drag.
-- Comparison harness against CW.
+- Statistical limits, EWMA, CUSUM, Isolation Forest, and change-point baselines.
+- Autoencoder, LSTM predictor, and temporal convolutional network after baseline validation.
+- Shared feature allowlists, windowing, scaling, splits, tuning budgets, persistence, grouping, and cooldown behavior.
+- Event recall, false-alert rate, detection delay, localization, cross-scenario degradation, and inference-latency scorecards.
+- Unified alert cards with detector version, threshold, onset estimate, contributing channels, evidence window, deterministic warnings, and data-quality context.
+- Counterfactual feature-dropout checks, stable channel-contribution views, and exportable incident reports.
+- Databricks Jobs and MLflow workflows for repeatable benchmark execution.
 
 Exit criteria:
 
-- CW error is characterized by separation and duration.
-- Nonlinear integrator tolerances pass convergence tests.
-- Event timing remains stable under smaller integration steps.
+- No training split leaks runs, fault episodes, truth, or label fields.
+- Statistical baselines are operational before neural methods are admitted.
+- All methods receive comparable tuning budgets and evaluation windows.
+- Results include event recall, false alerts per hour, detection delay, and localization.
+- Each alert links to evidence and avoids causal language.
+- Explanations remain stable under small perturbations.
 
-## Milestone 4: Six-degree-of-freedom docking
+## Sequencing rule
 
-Deliverables:
-
-- Quaternion attitude dynamics.
-- Docking-port transforms.
-- Attitude controller and thruster allocation.
-- Soft-contact model.
-- Combined center of mass and inertia.
-
-Exit criteria:
-
-- Quaternion norm remains bounded.
-- Momentum behavior is understood and documented during contact.
-- Side-docking coupling appears in Blue Moon scenario.
-
-## Milestone 5: Controller handoff
-
-Deliverables:
-
-- Orion-controlled Blue Moon stack.
-- Starship-controlled second stack.
-- Authority-token state machine.
-- Shadow-control comparison.
-- Handoff fault cases.
-
-Exit criteria:
-
-- No command discontinuity above configured limit.
-- Rollback succeeds for stale or inconsistent handoff data.
-- Telemetry records authority and command source unambiguously.
-
-## Milestone 6: Synthetic telemetry and Monte Carlo
-
-Deliverables:
-
-- Multi-rate sensors and estimator.
-- Fault injection.
-- Parquet run storage.
-- Distributed Monte Carlo runner.
-- Aggregate risk report.
-
-Exit criteria:
-
-- Fixed seeds reproduce run hashes.
-- Fault labels align with timestamps.
-- Statistical summaries converge with sample count.
-
-## Milestone 7: Anomaly benchmark
-
-Deliverables:
-
-- Statistical, Isolation Forest, and change-point baselines.
-- Autoencoder, LSTM, and TCN.
-- Common experiment runner.
-- Event-level scorecard.
-
-Exit criteria:
-
-- No split leakage by run or fault episode.
-- Baselines receive comparable tuning budgets.
-- Results include false alerts per hour and detection delay.
-
-## Milestone 8: Explainability and dashboard
-
-Deliverables:
-
-- Unified alert cards.
-- Channel contribution plots.
-- Replay dashboard.
-- Nominal/fault run comparison.
-- Exportable incident report.
-
-Exit criteria:
-
-- Each alert links to evidence channels and timeline.
-- Explanations are stable under small perturbations.
-- Dashboard can replay a complete run without loading all ensemble data into browser memory.
+Forward phases are dependency gates. Physics Credibility precedes combined-vehicle handoff; credible dynamics and handoff precede uncertainty ensembles; and anomaly models follow validated telemetry, labels, splits, and statistical baselines. Dashboard capability may evolve incrementally, but it must not drive or redefine physical and statistical semantics.
 
 # Verification and Validation
 

@@ -13,7 +13,7 @@ typecheck:
 	mypy src
 
 run-blue:
-	python -m a3docklab.cli configs/scenarios/blue_moon_side.yaml --output runs
+	python -m a3docklab.cli simulate configs/scenarios/blue_moon_side.yaml --output runs
 
 run-starship:
-	python -m a3docklab.cli configs/scenarios/starship_nose.yaml --output runs
+	python -m a3docklab.cli simulate configs/scenarios/starship_nose.yaml --output runs

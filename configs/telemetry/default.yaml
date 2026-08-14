@@ -1,0 +1,16 @@
+schema_version: "3.0"
+truth_rate_hz: 10.0
+control_rate_hz: 10.0
+navigation_rate_hz: 10.0
+relative_sensor_rate_hz: 5.0
+communications_rate_hz: 2.0
+range_noise_sigma_m: 0.05
+position_noise_sigma_m: 0.03
+velocity_noise_sigma_m_s: 0.005
+estimator_process_acceleration_sigma_m_s2: 0.01
+estimator_initial_position_sigma_m: 1.0
+estimator_initial_velocity_sigma_m_s: 0.1
+estimator_nis_threshold: 12.592
+communications_latency_s: 0.10
+packet_loss_probability: 0.0
+display_point_budget: 2000

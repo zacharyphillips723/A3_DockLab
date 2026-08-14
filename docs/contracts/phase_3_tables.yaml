@@ -1,0 +1,160 @@
+contract_name: a3docklab_phase_3
+schema_version: "3.0"
+primary_time_unit: ns
+tables:
+  simulation_runs:
+    primary_key: [run_id]
+    columns:
+      run_id: string
+      scenario_id: string
+      created_at_utc: timestamp
+      random_seed: int64
+      fidelity: string
+      terminal_phase: string
+      configuration_hash: string
+      source_revision: string
+      schema_version: string
+  truth_samples:
+    primary_key: [run_id, event_time_ns]
+    columns:
+      run_id: string
+      event_time_ns: int64
+      phase: string
+      position_lvlh_m: array<double>[3]
+      velocity_lvlh_m_s: array<double>[3]
+      range_m: double
+      closing_rate_m_s: double
+      propellant_used_kg: double
+      corridor_margin_m: double
+      keep_out_margin_m: double
+      attitude_quaternion_body_to_lvlh_wxyz: array<double>[4]
+      angular_rate_body_rad_s: array<double>[3]
+      port_separation_m: double
+      port_lateral_offset_m: double
+      port_angular_error_deg: double
+      port_clocking_error_deg: double
+      capture_eligible: boolean
+      docked_stack_active: boolean
+      stack_total_mass_kg: double
+      stack_center_of_mass_target_frame_m: array<double>[3]
+      stack_inertia_about_com_target_frame_kg_m2: array<double>[3,3]
+      capture_latched: boolean
+      capture_dissipated_energy_j: double
+      capture_linear_momentum_residual_kg_m_s: double
+      capture_angular_momentum_residual_kg_m2_s: double
+      stack_velocity_target_frame_m_s: array<double>[3]
+      stack_angular_rate_target_frame_rad_s: array<double>[3]
+      handoff_state: string
+      controller_authority: string
+      command_source: string
+      handoff_target: string
+      handoff_ready: boolean
+      handoff_reason: string
+      handoff_shadow_command_delta: double
+      handoff_packet_schema_version: string
+      handoff_packet_sequence: int64
+      handoff_packet_age_s: double
+      handoff_frame_id: string
+      handoff_frame_consistent: boolean
+      handoff_covariance_valid: boolean
+      handoff_clock_synchronized: boolean
+      handoff_phase_consistent: boolean
+      handoff_actuator_healthy: boolean
+      handoff_exchange_reason: string
+      orion_shadow_wrench: array<double>[6]
+      target_shadow_wrench: array<double>[6]
+      handoff_activation_command_delta: double
+      observed_orion_authority: boolean
+      observed_target_authority: boolean
+      authority_invariant_valid: boolean
+      stack_controller_vehicle: string
+      stack_control_active: boolean
+      active_owner_failure_injected: boolean
+      chaser_propellant_used_kg: double
+      target_propellant_used_kg: double
+  navigation_samples:
+    primary_key: [run_id, sensor_id, sequence_number]
+    columns:
+      run_id: string
+      sensor_id: string
+      sequence_number: int64
+      event_time_ns: int64
+      receive_time_ns: int64
+      position_lvlh_m: array<double>[3]
+      velocity_lvlh_m_s: array<double>[3]
+      position_sigma_m: array<double>[3]
+      velocity_sigma_m_s: array<double>[3]
+      channel_valid_mask: int64
+  actuation_samples:
+    primary_key: [run_id, event_time_ns]
+    columns:
+      run_id: string
+      event_time_ns: int64
+      commanded_force_n: array<double>[3]
+      actual_force_n: array<double>[3]
+      commanded_torque_n_m: array<double>[3]
+      actual_torque_n_m: array<double>[3]
+      stack_actual_torque_about_com_n_m: array<double>[3]
+      thruster_duty_cycles: array<double>[24]
+      allocation_force_residual_n: double
+      allocation_torque_residual_n_m: double
+      saturation_active: boolean
+      minimum_impulse_active: boolean
+      active_thruster_count: int64
+  navigation_estimates:
+    primary_key: [run_id, event_time_ns]
+    columns:
+      run_id: string
+      event_time_ns: int64
+      position_lvlh_m: array<double>[3]
+      velocity_lvlh_m_s: array<double>[3]
+      position_sigma_m: array<double>[3]
+      velocity_sigma_m_s: array<double>[3]
+      covariance_trace: double
+      innovation_position_m: array<double>[3]
+      innovation_velocity_m_s: array<double>[3]
+      normalized_innovation_squared: double
+      nis_threshold: double
+      innovation_consistent: boolean
+      measurement_used: boolean
+  communications_samples:
+    primary_key: [run_id, link_id, sequence_number]
+    columns:
+      run_id: string
+      link_id: string
+      sequence_number: int64
+      event_time_ns: int64
+      receive_time_ns: int64
+      data_age_ns: int64
+      packet_received: boolean
+      link_state: string
+  mission_events:
+    primary_key: [run_id, event_id]
+    columns:
+      run_id: string
+      event_id: string
+      event_time_ns: int64
+      event_type: string
+      phase: string
+      severity: string
+      detail: string
+  fault_labels:
+    primary_key: [run_id, fault_id]
+    feature_eligible: false
+    columns:
+      run_id: string
+      fault_id: string
+      fault_type: string
+      onset_time_ns: int64
+      recovery_time_ns: int64
+      severity: double
+      affected_channels: array<string>
+lakebase_tables:
+  run_annotations:
+    primary_key: [annotation_id]
+  saved_comparisons:
+    primary_key: [comparison_id]
+compatibility:
+  phase_2_telemetry_csv: readable
+  phase_2_events_csv: readable
+  silent_forward_fill: forbidden

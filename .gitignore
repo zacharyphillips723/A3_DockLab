@@ -10,5 +10,8 @@ dist/
 build/
 *.egg-info/
 runs/
+bundles/
+reports/
+ensembles/
 models/
 .DS_Store
