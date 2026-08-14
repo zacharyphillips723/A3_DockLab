@@ -1,0 +1,68 @@
+contract_name: a3docklab_phase_c_ensemble
+schema_version: "1.1"
+artifacts:
+  manifest.json:
+    required_fields:
+      - schema_version
+      - ensemble_id
+      - scenario
+      - random_seed
+      - sample_count
+      - parameter_order
+      - configuration_sha256
+      - execution_backend
+      - partition_count
+      - sample_seed_strategy
+  runs.parquet:
+    primary_key: [sample_index]
+    required_columns:
+      - sample_index
+      - sample_seed
+      - scenario
+      - terminal_phase
+      - capture_success
+      - abort
+      - propellant_used_kg
+      - closest_approach_m
+      - maximum_lateral_offset_m
+      - maximum_angular_error_deg
+      - allocation_saturation_fraction
+      - handoff_rollback
+      - final_authority
+      - sampled_faults
+      - sampled_fault_count
+      - faulted
+      - estimator_position_rmse_m
+      - estimator_velocity_rmse_m_s
+      - nis_consistent_fraction
+      - median_nis
+      - p95_nis
+      - maximum_covariance_trace
+  convergence.parquet:
+    primary_key: [sample_count]
+    required_columns:
+      - capture_rate
+      - abort_rate
+      - capture_rate_standard_error
+      - mean_propellant_used_kg
+  risk_summary.json:
+    required_fields:
+      - sample_count
+      - capture_rate
+      - abort_rate
+      - handoff_rollback_rate
+      - mean_propellant_used_kg
+      - p95_propellant_used_kg
+      - p05_closest_approach_m
+      - p95_maximum_lateral_offset_m
+      - p95_maximum_angular_error_deg
+      - faulted_run_fraction
+      - p05_nis_consistent_fraction
+      - p95_estimator_position_rmse_m
+      - p95_estimator_velocity_rmse_m_s
+      - p95_maximum_covariance_trace
+reproducibility:
+  seed_strategy: numpy_seed_sequence_spawn
+  parameter_order_is_semantic: true
+  correlation_matrix_validation: symmetric_positive_semidefinite
+  fault_sampling: independent_bernoulli_from_sample_child_stream

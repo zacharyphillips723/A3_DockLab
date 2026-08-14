@@ -1,0 +1,61 @@
+resources:
+  jobs:
+    simulation:
+      name: a3-docklab-simulation-${bundle.target}
+      max_concurrent_runs: 4
+      parameters:
+        - name: scenario
+          default: blue_moon_side
+      tasks:
+        - task_key: simulate_and_publish
+          spark_python_task:
+            python_file: ../databricks/jobs/simulation.py
+            parameters:
+              - --scenario
+              - "{{job.parameters.scenario}}"
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - -e ${workspace.file_path}
+
+    monte_carlo:
+      name: a3-docklab-monte-carlo-${bundle.target}
+      max_concurrent_runs: 2
+      parameters:
+        - name: scenario
+          default: blue_moon_side
+        - name: ensemble_config
+          default: default
+      tasks:
+        - task_key: run_ensemble
+          spark_python_task:
+            python_file: ../databricks/jobs/monte_carlo.py
+            parameters:
+              - --scenario
+              - "{{job.parameters.scenario}}"
+              - --ensemble-config
+              - "{{job.parameters.ensemble_config}}"
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --experiment
+              - ${resources.experiments.a3docklab.name}
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - -e ${workspace.file_path}
+
+  experiments:
+    a3docklab:
+      name: ${workspace.root_path}/experiments/a3docklab

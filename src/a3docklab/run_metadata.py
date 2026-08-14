@@ -33,7 +33,7 @@ class SourceRevision(BaseModel):
 
 
 class RunMetadata(BaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = "3.0"
     run_id: str
     created_at_utc: datetime
     scenario: str

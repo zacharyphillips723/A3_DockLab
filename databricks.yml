@@ -1,0 +1,44 @@
+bundle:
+  name: a3-docklab
+
+include:
+  - resources/*.yml
+
+sync:
+  include:
+    - app.py
+    - requirements.txt
+    - pyproject.toml
+    - src/**
+    - configs/**
+    - docs/mission_facts.yaml
+    - docs/assumption_register.csv
+    - databricks/**
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for A3 DockLab tables.
+    default: main
+  schema:
+    description: Unity Catalog schema for A3 DockLab tables.
+    default: a3docklab
+  warehouse_id:
+    description: SQL warehouse ID exposed to the Databricks App.
+    default: ""
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      schema: a3docklab_${workspace.current_user.short_name}
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      schema: a3docklab
+

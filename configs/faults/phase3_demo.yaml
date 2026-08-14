@@ -1,0 +1,16 @@
+faults:
+  - name: navigation_drift
+    start_s: 1200.0
+    duration_s: 300.0
+    severity: 0.002
+    affected_channels: [nav_y_m]
+  - name: thruster_underperformance
+    start_s: 1700.0
+    duration_s: 180.0
+    severity: 0.70
+    affected_channels: [actual_fx_n, actual_fy_n, actual_fz_n]
+  - name: communications_latency
+    start_s: 2000.0
+    duration_s: 240.0
+    severity: 1.5
+    affected_channels: [receive_time_ns, packet_received]

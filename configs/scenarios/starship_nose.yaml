@@ -1,6 +1,6 @@
 name: starship_nose_to_nose_reference
 random_seed: 3307
-duration_s: 1800.0
+duration_s: 4000.0
 step_s: 1.0
 fidelity: cw
 orbit:
@@ -30,4 +30,43 @@ docking:
   max_lateral_offset_m: 0.08
   max_angular_error_deg: 1.5
   docked_controller: target
+  chaser_port:
+    position_body_m: [0.0, 4.0, 0.0]
+    outward_normal_body: [0.0, 1.0, 0.0]
+    up_body: [0.0, 0.0, 1.0]
+  target_port:
+    position_body_m: [0.0, -26.0, 0.0]
+    outward_normal_body: [0.0, -1.0, 0.0]
+    up_body: [0.0, 0.0, 1.0]
+guidance:
+  docking_axis: y
+  approach_sign: -1
+  hold_points_m: [250.0, 30.0]
+  hold_duration_s: 10.0
+  far_closing_rate_m_s: 0.8
+  proximity_closing_rate_m_s: 0.25
+  final_closing_rate_m_s: 0.04
+controller:
+  velocity_gain_s_inv: 0.08
+  lateral_position_gain_s2_inv: 0.002
+  minimum_impulse_s: 0.05
+  velocity_deadband_m_s: 0.002
+handoff:
+  quiet_period_s: 2.0
+  quiet_command_limit: 5.0
+  acknowledgement_timeout_s: 5.0
+  maximum_command_discontinuity: 10.0
+  maximum_data_age_s: 0.5
+  required_frame_id: target_lvlh
+  injected_fault: none
+  shadow_velocity_gain_s_inv: 0.002
+  shadow_rate_gain_s_inv: 0.02
+  post_handoff_control_duration_s: 60.0
+  active_failure_delay_s: 5.0
+safety:
+  corridor_half_angle_deg: 10.0
+  corridor_min_radius_m: 0.25
+  keep_out_radius_m: 10.0
+  closing_rate_margin_m_s: 0.05
+  abort_retreat_rate_m_s: 0.2
 initial_relative_state_m_mps: [0.0, -1500.0, 0.0, 0.0, 0.55, 0.0]
