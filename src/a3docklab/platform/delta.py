@@ -63,7 +63,7 @@ class DatabricksSqlExecutor:
             sql.connect(
                 server_hostname=self.server_hostname,
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
-                credentials_provider=config.authenticate,
+                credentials_provider=lambda: config.authenticate,
             ) as connection,
             connection.cursor() as cursor,
         ):
@@ -128,7 +128,38 @@ class SparkDeltaCatalog:
         self.spark = spark
 
     def append_table(self, table: str, frame: pd.DataFrame) -> None:
-        self.spark.createDataFrame(frame).write.format("delta").mode("append").saveAsTable(table)
+        # Spark Connect (serverless) cannot infer a schema from an empty pandas
+        # frame, so derive an explicit schema from the pandas dtypes in that case.
+        if frame.empty:
+            spark_frame = self.spark.createDataFrame(frame, schema=self._infer_schema(frame))
+        else:
+            spark_frame = self.spark.createDataFrame(frame)
+        spark_frame.write.format("delta").mode("append").saveAsTable(table)
+
+    @staticmethod
+    def _infer_schema(frame: pd.DataFrame) -> Any:
+        import pandas.api.types as ptypes
+        from pyspark.sql.types import (
+            BooleanType,
+            DoubleType,
+            LongType,
+            StringType,
+            StructField,
+            StructType,
+        )
+
+        fields = []
+        for name, dtype in frame.dtypes.items():
+            if ptypes.is_bool_dtype(dtype):
+                spark_type: Any = BooleanType()
+            elif ptypes.is_integer_dtype(dtype):
+                spark_type = LongType()
+            elif ptypes.is_float_dtype(dtype):
+                spark_type = DoubleType()
+            else:
+                spark_type = StringType()
+            fields.append(StructField(str(name), spark_type, True))
+        return StructType(fields)
 
     def read_table(
         self,

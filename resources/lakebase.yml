@@ -7,9 +7,8 @@ resources:
       retention_window_in_days: 7
       enable_pg_native_login: false
 
-  database_catalogs:
-    app_state_catalog:
-      name: a3docklab_state_${bundle.target}
-      database_instance_name: ${resources.database_instances.app_state.name}
-      database_name: a3docklab
-      create_database_if_not_exists: true
+  # NOTE: database_catalogs (UC registration of the Postgres DB) removed for the
+  # fevm-testing-playground deploy — creating it needs CREATE CATALOG on the
+  # metastore (owned by metastore_admins), which the deployer lacks. The app and
+  # smoke test connect to Lakebase Postgres directly, so the UC catalog is not
+  # required. The a3docklab Postgres database already exists in the instance.

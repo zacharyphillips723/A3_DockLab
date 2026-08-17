@@ -23,8 +23,13 @@ def main() -> None:
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--schema", required=True)
     parser.add_argument("--experiment", required=True)
+    parser.add_argument("--assets-root", default=None)
     arguments = parser.parse_args()
-    root = Path(__file__).resolve().parents[2]
+    root = (
+        Path(arguments.assets_root)
+        if arguments.assets_root
+        else Path(__file__).resolve().parents[2]
+    )
     scenario = load_config(root / "configs/scenarios" / f"{arguments.scenario}.yaml")
     config = load_monte_carlo_config(
         root / "configs/monte_carlo" / f"{arguments.ensemble_config}.yaml"

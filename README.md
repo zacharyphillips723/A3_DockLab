@@ -69,6 +69,45 @@ tracks experiments. Lakebase should hold application-facing state such as run
 annotations and saved views, rather than becoming a dependency of the physics
 engine.
 
+## Deploying to Databricks
+
+The bundle deploys to a development workspace with the following sequence. It
+requires the Databricks CLI, an authenticated profile, permission to deploy
+Apps/Jobs/experiments/Lakebase resources and to grant on the target catalog,
+and an existing SQL warehouse ID.
+
+```bash
+databricks auth login --host https://<workspace-host>
+
+databricks bundle deploy -t dev \
+  --var="catalog=<catalog>,warehouse_id=<warehouse-id>"
+
+# Provision + grant the App's service principal (UC USE CATALOG / USE SCHEMA /
+# SELECT and Lakebase Postgres USAGE, CREATE). Also creates the UC schema and
+# the Lakebase database if absent. Idempotent.
+databricks bundle run -t dev \
+  --var="catalog=<catalog>,warehouse_id=<warehouse-id>" grant
+
+# Populate Delta replay tables so the App has data on startup.
+databricks bundle run -t dev \
+  --var="catalog=<catalog>,warehouse_id=<warehouse-id>" simulation
+
+# Deploy the App source and start its compute.
+databricks bundle run -t dev \
+  --var="catalog=<catalog>,warehouse_id=<warehouse-id>" mission_replay
+
+# Acceptance gate.
+databricks bundle run -t dev \
+  --var="catalog=<catalog>,warehouse_id=<warehouse-id>" smoke
+```
+
+The `catalog` variable must name a catalog you can grant on; `main` is the
+default. The App's service principal is created by `bundle deploy`, so `grant`
+must run after it. The App connects to Lakebase Postgres directly, so the
+database is not registered as a Unity Catalog catalog. To add that registration
+(for querying Lakebase through the SQL Warehouse), define a `database_catalogs`
+resource; it requires `CREATE CATALOG` on the metastore.
+
 ## Project document
 
 See `docs/A3_DockLab_Project_Plan.md` for the full system design, equations, library choices, testing plan, implementation roadmap, and known risks.
