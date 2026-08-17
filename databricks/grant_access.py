@@ -1,7 +1,8 @@
 """Provision and grant the deployed App's service principal access to A3 DockLab.
 
-Run after ``databricks bundle deploy`` (the App must exist so its service
-principal is known). Idempotent: safe to re-run on every deployment.
+Use ``--bootstrap-only`` after deploying the Lakebase instance and before the
+full bundle deploy. Run without it after the full deploy to grant the App's
+service principal access. Both modes are idempotent.
 
 This step covers what the bundle cannot express declaratively:
 
@@ -57,8 +58,11 @@ def _grant_unity_catalog(
     print(f"Granted USE CATALOG + USE SCHEMA/SELECT to {principal}")
 
 
-def _grant_lakebase(
-    workspace: WorkspaceClient, instance_name: str, database_name: str, principal: str
+def _provision_lakebase(
+    workspace: WorkspaceClient,
+    instance_name: str,
+    database_name: str,
+    principal: str | None = None,
 ) -> None:
     import psycopg
     from psycopg import sql
@@ -68,13 +72,13 @@ def _grant_lakebase(
         instance_names=[instance_name]
     )
     user = workspace.current_user.me().user_name
-    connection_kwargs = dict(
-        host=instance.read_write_dns,
-        port=5432,
-        user=user,
-        password=credential.token,
-        sslmode="require",
-    )
+    connection_kwargs = {
+        "host": instance.read_write_dns,
+        "port": 5432,
+        "user": user,
+        "password": credential.token,
+        "sslmode": "require",
+    }
 
     # CREATE DATABASE cannot run inside a transaction; use autocommit.
     with psycopg.connect(dbname="databricks_postgres", autocommit=True, **connection_kwargs) as admin:
@@ -89,6 +93,9 @@ def _grant_lakebase(
         else:
             print(f"Lakebase database {database_name!r} already exists")
 
+    if principal is None:
+        return
+
     with psycopg.connect(dbname=database_name, **connection_kwargs) as database:
         database.execute(
             sql.SQL("GRANT USAGE, CREATE ON SCHEMA public TO {}").format(
@@ -101,14 +108,23 @@ def _grant_lakebase(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--catalog", required=True)
-    parser.add_argument("--schema", required=True)
-    parser.add_argument("--app-name", required=True)
+    parser.add_argument("--catalog")
+    parser.add_argument("--schema")
+    parser.add_argument("--app-name")
     parser.add_argument("--database-instance-name", required=True)
     parser.add_argument("--database-name", required=True)
+    parser.add_argument("--bootstrap-only", action="store_true")
     arguments = parser.parse_args()
 
     workspace = WorkspaceClient()
+    if arguments.bootstrap_only:
+        _provision_lakebase(
+            workspace, arguments.database_instance_name, arguments.database_name
+        )
+        return
+
+    if not arguments.catalog or not arguments.schema or not arguments.app_name:
+        parser.error("--catalog, --schema, and --app-name are required unless --bootstrap-only")
     app = workspace.apps.get(arguments.app_name)
     principal = app.service_principal_client_id
     if not principal:
@@ -119,7 +135,7 @@ def main() -> None:
 
     _ensure_schema(workspace, arguments.catalog, arguments.schema)
     _grant_unity_catalog(workspace, arguments.catalog, arguments.schema, principal)
-    _grant_lakebase(
+    _provision_lakebase(
         workspace, arguments.database_instance_name, arguments.database_name, principal
     )
     print(f"Access provisioned for App service principal {principal}")

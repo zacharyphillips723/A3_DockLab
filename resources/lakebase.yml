@@ -7,8 +7,6 @@ resources:
       retention_window_in_days: 7
       enable_pg_native_login: false
 
-  # NOTE: database_catalogs (UC registration of the Postgres DB) removed for the
-  # fevm-testing-playground deploy — creating it needs CREATE CATALOG on the
-  # metastore (owned by metastore_admins), which the deployer lacks. The app and
-  # smoke test connect to Lakebase Postgres directly, so the UC catalog is not
-  # required. The a3docklab Postgres database already exists in the instance.
+  # The App connects to Lakebase directly, so UC database registration is not
+  # required. The bootstrap script creates its PostgreSQL database before the
+  # full bundle deploy without requiring metastore CREATE CATALOG permission.

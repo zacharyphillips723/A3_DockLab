@@ -26,8 +26,20 @@ variables:
     description: SQL warehouse ID exposed to the Databricks App.
 
 scripts:
+  # Break the fresh-workspace dependency cycle: first deploy only the Lakebase
+  # instance, then create the database required by the App resource binding.
+  bootstrap:
+    env:
+      A3_DB_INSTANCE: ${bundle.name}-${bundle.target}
+      A3_DB_NAME: a3docklab
+    content: >-
+      uv run --extra databricks python databricks/grant_access.py
+      --database-instance-name "$A3_DB_INSTANCE"
+      --database-name "$A3_DB_NAME"
+      --bootstrap-only
+
   # Provisions the deployed App's service principal: ensures the UC schema and
-  # Lakebase database exist, then grants UC (USE CATALOG / USE SCHEMA / SELECT)
+  # Lakebase database exists, then grants UC (USE CATALOG / USE SCHEMA / SELECT)
   # and Lakebase Postgres (USAGE, CREATE) access. Run after `bundle deploy` and
   # before starting the App. Idempotent.
   grant:

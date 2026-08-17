@@ -79,12 +79,20 @@ and an existing SQL warehouse ID.
 ```bash
 databricks auth login --host https://<workspace-host>
 
+# Fresh workspace: create the Lakebase instance first, then bootstrap the
+# PostgreSQL database required by the App resource binding.
+databricks bundle deploy -t dev --select database_instances.app_state \
+  --var="catalog=<catalog>,warehouse_id=<warehouse-id>"
+databricks bundle run -t dev \
+  --var="catalog=<catalog>,warehouse_id=<warehouse-id>" bootstrap
+
+# Deploy the complete bundle after the database exists.
 databricks bundle deploy -t dev \
   --var="catalog=<catalog>,warehouse_id=<warehouse-id>"
 
 # Provision + grant the App's service principal (UC USE CATALOG / USE SCHEMA /
 # SELECT and Lakebase Postgres USAGE, CREATE). Also creates the UC schema and
-# the Lakebase database if absent. Idempotent.
+# verifies the Lakebase database exists. Idempotent.
 databricks bundle run -t dev \
   --var="catalog=<catalog>,warehouse_id=<warehouse-id>" grant
 
