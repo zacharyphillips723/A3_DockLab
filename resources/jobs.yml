@@ -28,13 +28,15 @@ resources:
               - ${var.catalog}
               - --schema
               - ${var.schema}
+              - --assets-root
+              - ${workspace.file_path}
           environment_key: default
       environments:
         - environment_key: default
           spec:
             environment_version: "4"
             dependencies:
-              - -e ${workspace.file_path}
+              - ${workspace.file_path}
 
     monte_carlo:
       name: a3-docklab-monte-carlo-${bundle.target}
@@ -70,13 +72,15 @@ resources:
               - ${var.schema}
               - --experiment
               - ${resources.experiments.a3docklab.name}
+              - --assets-root
+              - ${workspace.file_path}
           environment_key: default
       environments:
         - environment_key: default
           spec:
             environment_version: "4"
             dependencies:
-              - -e ${workspace.file_path}
+              - ${workspace.file_path}
 
   experiments:
     a3docklab:

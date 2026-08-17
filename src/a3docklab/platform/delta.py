@@ -63,7 +63,7 @@ class DatabricksSqlExecutor:
             sql.connect(
                 server_hostname=self.server_hostname,
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
-                credentials_provider=config.authenticate,
+                credentials_provider=lambda: config.authenticate,
             ) as connection,
             connection.cursor() as cursor,
         ):
@@ -128,7 +128,10 @@ class SparkDeltaCatalog:
         self.spark = spark
 
     def append_table(self, table: str, frame: pd.DataFrame) -> None:
-        self.spark.createDataFrame(frame).write.format("delta").mode("append").saveAsTable(table)
+        if frame.empty:
+            return
+        spark_frame = self.spark.createDataFrame(frame)
+        spark_frame.write.format("delta").mode("append").saveAsTable(table)
 
     def read_table(
         self,
@@ -222,7 +225,8 @@ class DeltaRunStorage:
             frame = source.copy()
             frame["run_id"] = metadata.run_id
             frame = frame[["run_id", *[column for column in frame if column != "run_id"]]]
-            self.catalog.append_table(self._table(name), frame)
+            if not frame.empty:
+                self.catalog.append_table(self._table(name), frame)
             descriptors.append(
                 StreamManifest(
                     name=name,
@@ -290,6 +294,8 @@ class DeltaReplayStore:
         descriptor = next((item for item in manifests[run_id].streams if item.name == stream), None)
         if descriptor is None:
             raise KeyError(f"Unknown stream {stream!r}")
+        if descriptor.row_count == 0:
+            return pd.DataFrame(columns=columns)
         filters = [TableFilter("run_id", "eq", run_id)]
         if start_ns is not None:
             filters.append(TableFilter(descriptor.time_column, "ge", start_ns))

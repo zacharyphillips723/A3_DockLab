@@ -25,7 +25,18 @@ def main() -> None:
 
     workspace = WorkspaceClient()
     job_name = f"a3-docklab-simulation-{arguments.target}"
-    job = next(iter(workspace.jobs.list(name=job_name)), None)
+    # In `mode: development` bundles the deployed name carries a "[dev <user>] "
+    # prefix, so match on the suffix rather than the exact name.
+    job = next(
+        (
+            candidate
+            for candidate in workspace.jobs.list()
+            if candidate.settings is not None
+            and candidate.settings.name is not None
+            and candidate.settings.name.endswith(job_name)
+        ),
+        None,
+    )
     if job is None or job.job_id is None:
         raise RuntimeError(f"Deployed simulation Job {job_name!r} was not found")
     workspace.jobs.run_now(

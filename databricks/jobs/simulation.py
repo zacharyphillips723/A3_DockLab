@@ -20,8 +20,13 @@ def main() -> None:
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--schema", required=True)
+    parser.add_argument("--assets-root", default=None)
     arguments = parser.parse_args()
-    root = Path(__file__).resolve().parents[2]
+    root = (
+        Path(arguments.assets_root)
+        if arguments.assets_root
+        else Path(__file__).resolve().parents[2]
+    )
     config = load_config(root / "configs/scenarios" / f"{arguments.scenario}.yaml")
     telemetry_config = load_telemetry_config(root / "configs/telemetry/default.yaml")
     faults = FaultConfig()

@@ -176,3 +176,25 @@ def test_delta_storage_and_replay_share_the_local_contract(controlled_result: tu
     assert len(window) <= 100
     assert window["event_time_ns"].between(100_000_000_000, 200_000_000_000).all()
     assert "test_a3_navigation_estimates" in catalog.tables
+    assert "test_a3_fault_labels" not in catalog.tables
+    empty_labels = store.query_stream(metadata.run_id, "fault_labels")
+    assert empty_labels.empty
+
+
+def test_fault_labels_keep_their_contract_when_no_faults(controlled_result: tuple) -> None:
+    _, config, result = controlled_result
+    labels = generate_streams(
+        result, TelemetryConfig(), FaultConfig(), random_seed=config.random_seed
+    ).fault_labels
+
+    assert list(labels.columns) == [
+        "run_id",
+        "fault_id",
+        "fault_type",
+        "onset_time_ns",
+        "recovery_time_ns",
+        "severity",
+        "affected_channels",
+    ]
+    assert labels.empty
+    assert str(labels["onset_time_ns"].dtype) == "int64"

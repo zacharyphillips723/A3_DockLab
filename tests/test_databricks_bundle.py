@@ -29,7 +29,9 @@ def test_databricks_bundle_declares_targets_and_platform_resources() -> None:
         assert worker["depends_on"] == [{"task_key": "setup_lakehouse"}]
     assert "a3docklab" in resources["experiments"]
     assert "app_state" in lakebase["database_instances"]
-    assert lakebase["database_catalogs"]["app_state_catalog"]["create_database_if_not_exists"]
+    assert "database_catalogs" not in lakebase
+    assert "bootstrap" in bundle["scripts"]
+    assert "--bootstrap-only" in bundle["scripts"]["bootstrap"]["content"]
     assert app["source_code_path"] == ".."
     assert {item["name"] for item in app["resources"]} == {
         "sql_warehouse",

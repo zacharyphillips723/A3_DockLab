@@ -442,7 +442,27 @@ def generate_streams(
                 }
             )
     events = pd.DataFrame(event_rows).sort_values("event_time_ns", ignore_index=True)
-    labels = pd.DataFrame(label_rows)
+    labels = pd.DataFrame(
+        label_rows,
+        columns=(
+            "run_id",
+            "fault_id",
+            "fault_type",
+            "onset_time_ns",
+            "recovery_time_ns",
+            "severity",
+            "affected_channels",
+        ),
+    ).astype(
+        {
+            "run_id": "string",
+            "fault_id": "string",
+            "fault_type": "string",
+            "onset_time_ns": "int64",
+            "recovery_time_ns": "int64",
+            "severity": "float64",
+        }
+    )
     allowlist = (
         "nav_x_m",
         "nav_y_m",
