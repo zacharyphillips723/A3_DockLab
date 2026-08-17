@@ -50,6 +50,12 @@ streams without filesystem access. Time and run filters are pushed into the
 catalog before conversion to pandas, and display decimation happens only after
 the filtered query.
 
+The Databricks App uses a read-only `SqlWarehouseDeltaCatalog`. It authenticates
+through the App runtime's Databricks credentials, binds to the configured SQL
+warehouse, validates every catalog/schema/table/column identifier, and sends
+filter values as native query parameters. This preserves run and time predicate
+pushdown without exposing write access from the UI process.
+
 Workspace setup may choose a Unity Catalog-qualified table prefix, for example
 `main.a3docklab.a3docklab`, by constructing the adapters with that prefix. Table creation,
 permissions, cluster policy, and authentication remain deployment plumbing and

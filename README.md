@@ -97,7 +97,8 @@ Carlo risk analysis with structured fault sampling and estimator-consistency
 tails. Delta Lake storage/replay adapters now preserve the same contract for
 local and Databricks-backed replay. A Databricks bundle now packages the replay
 App, serverless simulation and Monte Carlo Jobs, MLflow experiment, and dev/prod
-targets. SQL-backed App replay, Lakebase state, and optional
+targets. The App now queries Delta replay tables through its bound SQL warehouse
+using runtime OAuth and falls back to local bundles for development. Lakebase state and optional
 orbital perturbations remain planned. All vehicle values are public-source estimates or explicit engineering
 placeholders.
 

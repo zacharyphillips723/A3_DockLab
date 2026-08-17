@@ -23,6 +23,7 @@ dependencies = [
 ui = ["plotly>=6.0", "dash>=3.0"]
 ml = ["scikit-learn>=1.5", "ruptures>=1.1.9", "torch>=2.4", "captum>=0.7"]
 storage = ["pyarrow>=17.0"]
+databricks = ["databricks-sdk>=0.64", "databricks-sql-connector[pyarrow]>=4.0"]
 astro = ["astropy>=6.1"]
 performance = ["numba>=0.60"]
 dev = [
