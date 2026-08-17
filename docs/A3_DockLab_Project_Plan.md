@@ -1567,8 +1567,11 @@ Databricks bundle foundation now declares development/production targets, the
 replay App, serverless simulation and Monte Carlo Jobs, an MLflow experiment,
 and secret-free deployment variables. SQL-backed App replay now uses the bound
 warehouse with runtime OAuth, parameterized predicates, validated identifiers,
-and local filesystem fallback. Lakebase application state is the remaining
-platform work in this phase.
+and local filesystem fallback. Bundle-managed Lakebase application state now
+covers annotations, saved views, reviewer dispositions, and saved comparisons
+through an independently tested transactional repository. This completes the
+planned Phase C platform boundary; workspace deployment validation remains an
+environment-specific release gate.
 - MLflow experiment tracking for simulation and later model-training runs.
 - Lakebase-backed annotations, saved views, review state, and comparisons.
 

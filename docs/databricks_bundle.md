@@ -14,6 +14,8 @@ source control.
 - `monte_carlo`: serverless Python task that writes ensemble/convergence/risk
   tables and logs aggregate metrics to MLflow.
 - `a3docklab`: MLflow experiment scoped beneath the target workspace root.
+- `app_state`: Lakebase database instance/catalog for annotations, saved views,
+  per-user review status, and saved run comparisons.
 
 The `dev` target isolates its Unity Catalog schema by workspace user. The
 `prod` target uses the stable `a3docklab` schema and a shared bundle root.
@@ -48,4 +50,6 @@ catalog, schema, and warehouse identifiers plus resource bindings for the SQL
 warehouse, both Jobs, and MLflow. In Databricks it uses OAuth-backed,
 parameterized SQL Warehouse queries against the same Delta replay contract; in
 local development it falls back to filesystem bundles. Lakebase-backed mutable
-review state is the next platform increment.
+review state is provided through a PostgreSQL-compatible application service;
+the App initializes its tables through the bound database resource using
+runtime OAuth. The telemetry and mutable-state stores remain separate by design.

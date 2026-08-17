@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from a3docklab.application.state import ApplicationStateStore, PostgresConnectionFactory
 from a3docklab.platform.delta import (
     DatabricksSqlExecutor,
     DeltaReplayStore,
@@ -25,7 +26,16 @@ def replay_store() -> DeltaReplayStore | LocalReplayStore:
     return LocalReplayStore(Path(os.getenv("A3DOCKLAB_BUNDLE_ROOT", "bundles")))
 
 
+def application_state_store() -> ApplicationStateStore | None:
+    if not all(os.getenv(name) for name in ("PGHOST", "PGDATABASE", "PGUSER")):
+        return None
+    store = ApplicationStateStore(PostgresConnectionFactory())
+    store.initialize()
+    return store
+
+
 app = create_app(replay_store())
+state_store = application_state_store()
 server = app.server
 
 

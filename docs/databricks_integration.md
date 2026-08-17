@@ -56,6 +56,13 @@ warehouse, validates every catalog/schema/table/column identifier, and sends
 filter values as native query parameters. This preserves run and time predicate
 pushdown without exposing write access from the UI process.
 
+Lakebase holds four mutable, transactionally updated entities: time-addressable
+run annotations, owner-scoped saved views, reviewer-scoped run dispositions,
+and saved baseline/candidate comparisons. The App receives the standard `PG*`
+connection variables from its database resource and obtains an OAuth password
+from the runtime Databricks identity. Tables are initialized idempotently, and
+no mutable state is written into Delta telemetry tables.
+
 Workspace setup may choose a Unity Catalog-qualified table prefix, for example
 `main.a3docklab.a3docklab`, by constructing the adapters with that prefix. Table creation,
 permissions, cluster policy, and authentication remain deployment plumbing and
