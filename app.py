@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from a3docklab.application.api import register_state_routes
 from a3docklab.application.state import ApplicationStateStore, PostgresConnectionFactory
 from a3docklab.platform.delta import (
     DatabricksSqlExecutor,
@@ -37,6 +38,7 @@ def application_state_store() -> ApplicationStateStore | None:
 app = create_app(replay_store())
 state_store = application_state_store()
 server = app.server
+register_state_routes(server, lambda: state_store)
 
 
 if __name__ == "__main__":

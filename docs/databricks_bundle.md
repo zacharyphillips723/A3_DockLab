@@ -39,6 +39,28 @@ databricks bundle run -t dev simulation \
   --params scenario=blue_moon_side
 ```
 
+The warehouse ID is required. It can alternatively be supplied through
+`DATABRICKS_BUNDLE_VAR_warehouse_id`; the bundle intentionally has no empty or
+workspace-specific default.
+
+## Deployment smoke gate
+
+After deployment and after the App reaches `RUNNING`, execute:
+
+```bash
+databricks bundle run -t dev smoke \
+  --var="catalog=<catalog>,warehouse_id=<warehouse-id>"
+```
+
+The smoke script runs the Blue Moon simulation Job, verifies the resulting run
+and truth samples through SQL Warehouse replay, checks App/Lakebase health,
+creates an annotation through the authenticated App API, and reads it back.
+Deployment is accepted only when the entire sequence succeeds.
+
+Both compute Jobs begin with an idempotent `CREATE SCHEMA IF NOT EXISTS` task.
+The development schema is the identifier-safe `a3docklab_dev`; teams sharing a
+workspace should override `schema` to isolate deployments.
+
 Production deployment should supply a service-principal `run_as` override and
 explicit permissions through the deployment pipeline. Credentials, workspace
 URLs, warehouse IDs, and service-principal identifiers must not be committed.

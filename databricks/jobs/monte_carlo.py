@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument("--schema", required=True)
     parser.add_argument("--experiment", required=True)
     arguments = parser.parse_args()
-    root = Path.cwd()
+    root = Path(__file__).resolve().parents[2]
     scenario = load_config(root / "configs/scenarios" / f"{arguments.scenario}.yaml")
     config = load_monte_carlo_config(
         root / "configs/monte_carlo" / f"{arguments.ensemble_config}.yaml"
@@ -37,7 +37,10 @@ def main() -> None:
         raise RuntimeError("An active SparkSession is required")
     catalog = SparkDeltaCatalog(spark)
     prefix = f"{arguments.catalog}.{arguments.schema}.a3docklab"
-    for suffix, frame in (("ensemble_runs", result.runs), ("ensemble_convergence", result.convergence)):
+    for suffix, frame in (
+        ("ensemble_runs", result.runs),
+        ("ensemble_convergence", result.convergence),
+    ):
         payload = frame.copy()
         payload.insert(0, "ensemble_id", ensemble_id)
         catalog.append_table(f"{prefix}_{suffix}", payload)
@@ -63,9 +66,7 @@ def main() -> None:
                 "random_seed": config.random_seed,
             }
         )
-        mlflow.log_metrics(
-            {key: float(value) for key, value in result.risk_summary.items()}
-        )
+        mlflow.log_metrics({key: float(value) for key, value in result.risk_summary.items()})
 
 
 if __name__ == "__main__":

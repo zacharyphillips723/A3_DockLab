@@ -101,6 +101,10 @@ targets. The App now queries Delta replay tables through its bound SQL warehouse
 using runtime OAuth and falls back to local bundles for development. Lakebase
 stores annotations, saved views, review state, and run comparisons. Optional
 orbital perturbations remain planned. All vehicle values are public-source estimates or explicit engineering
+
+Workspace releases use `databricks bundle run -t dev smoke` as the acceptance
+gate after deployment; it verifies Job execution, Delta replay, App health, and
+a Lakebase annotation round trip.
 placeholders.
 
 ## License

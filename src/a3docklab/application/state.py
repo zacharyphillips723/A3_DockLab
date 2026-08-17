@@ -55,8 +55,8 @@ class PostgresConnectionFactory:
 
     def __call__(self) -> Any:
         try:
-            import psycopg  # type: ignore[import-not-found]
-            from databricks.sdk.core import Config  # type: ignore[import-not-found]
+            import psycopg
+            from databricks.sdk.core import Config
         except ImportError as exc:
             raise RuntimeError(
                 "Lakebase state requires the 'databricks' optional dependency"
@@ -117,6 +117,9 @@ class ApplicationStateStore:
         )
         for statement in statements:
             self._execute(statement)
+
+    def healthcheck(self) -> bool:
+        return self._execute("SELECT 1", fetch=True) == [(1,)]
 
     @staticmethod
     def _now() -> datetime:

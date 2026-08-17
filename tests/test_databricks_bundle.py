@@ -19,7 +19,14 @@ def test_databricks_bundle_declares_targets_and_platform_resources() -> None:
     assert {"dev", "prod"} <= bundle["targets"].keys()
     assert bundle["targets"]["dev"]["mode"] == "development"
     assert bundle["targets"]["prod"]["mode"] == "production"
+    assert "default" not in bundle["variables"]["warehouse_id"]
+    assert "smoke" in bundle["scripts"]
     assert {"simulation", "monte_carlo"} <= resources["jobs"].keys()
+    for job in resources["jobs"].values():
+        tasks = {task["task_key"]: task for task in job["tasks"]}
+        assert "setup_lakehouse" in tasks
+        worker = next(task for key, task in tasks.items() if key != "setup_lakehouse")
+        assert worker["depends_on"] == [{"task_key": "setup_lakehouse"}]
     assert "a3docklab" in resources["experiments"]
     assert "app_state" in lakebase["database_instances"]
     assert lakebase["database_catalogs"]["app_state_catalog"]["create_database_if_not_exists"]
@@ -39,3 +46,11 @@ def test_bundle_contains_no_workspace_credentials() -> None:
     assert "token:" not in text
     assert "client_secret:" not in text
     assert "https://" not in text
+
+
+def test_workspace_jobs_resolve_files_from_the_deployed_source_tree() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for name in ("simulation.py", "monte_carlo.py"):
+        source = (root / "databricks/jobs" / name).read_text(encoding="utf-8")
+        assert "Path(__file__).resolve().parents[2]" in source
+        assert "Path.cwd()" not in source

@@ -53,17 +53,20 @@ class DatabricksSqlExecutor:
 
     def execute(self, query: str, parameters: Mapping[str, object]) -> pd.DataFrame:
         try:
-            from databricks.sdk.core import Config  # type: ignore[import-not-found]
+            from databricks.sdk.core import Config
 
-            from databricks import sql  # type: ignore[attr-defined]
+            from databricks import sql
         except ImportError as exc:
             raise RuntimeError("SQL replay requires the 'databricks' optional dependency") from exc
         config = Config()
-        with sql.connect(
-            server_hostname=self.server_hostname,
-            http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
-            credentials_provider=lambda: config.authenticate,
-        ) as connection, connection.cursor() as cursor:
+        with (
+            sql.connect(
+                server_hostname=self.server_hostname,
+                http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
+                credentials_provider=config.authenticate,
+            ) as connection,
+            connection.cursor() as cursor,
+        ):
             cursor.execute(query, parameters=parameters)
             return cast(pd.DataFrame, cursor.fetchall_arrow().to_pandas())
 
