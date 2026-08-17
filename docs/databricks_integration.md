@@ -63,6 +63,11 @@ connection variables from its database resource and obtains an OAuth password
 from the runtime Databricks identity. Tables are initialized idempotently, and
 no mutable state is written into Delta telemetry tables.
 
+The deployed App exposes authenticated health and annotation endpoints used by
+the release smoke gate. A deployment is not accepted until one simulation Job
+has created Delta telemetry, SQL replay can query it, Lakebase reports healthy,
+and an annotation survives a write/read round trip.
+
 Workspace setup may choose a Unity Catalog-qualified table prefix, for example
 `main.a3docklab.a3docklab`, by constructing the adapters with that prefix. Table creation,
 permissions, cluster policy, and authentication remain deployment plumbing and

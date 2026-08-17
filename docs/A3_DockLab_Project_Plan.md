@@ -1571,7 +1571,10 @@ and local filesystem fallback. Bundle-managed Lakebase application state now
 covers annotations, saved views, reviewer dispositions, and saved comparisons
 through an independently tested transactional repository. This completes the
 planned Phase C platform boundary; workspace deployment validation remains an
-environment-specific release gate.
+environment-specific release gate. That gate is now automated: it runs a
+reference simulation, verifies SQL-backed Delta replay, checks App/Lakebase
+health, and performs an annotation write/read round trip. Release acceptance
+requires this smoke command to pass in the target workspace.
 - MLflow experiment tracking for simulation and later model-training runs.
 - Lakebase-backed annotations, saved views, review state, and comparisons.
 

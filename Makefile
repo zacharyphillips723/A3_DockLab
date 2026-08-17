@@ -1,4 +1,4 @@
-.PHONY: install test lint typecheck run-blue run-starship bundle-validate bundle-deploy
+.PHONY: install test lint typecheck run-blue run-starship bundle-validate bundle-deploy bundle-smoke
 
 install:
 	python -m pip install -e ".[dev]"
@@ -23,3 +23,6 @@ bundle-validate:
 
 bundle-deploy:
 	databricks bundle deploy -t dev
+
+bundle-smoke:
+	databricks bundle run -t dev smoke

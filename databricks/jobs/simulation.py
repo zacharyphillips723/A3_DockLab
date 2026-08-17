@@ -21,7 +21,7 @@ def main() -> None:
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--schema", required=True)
     arguments = parser.parse_args()
-    root = Path.cwd()
+    root = Path(__file__).resolve().parents[2]
     config = load_config(root / "configs/scenarios" / f"{arguments.scenario}.yaml")
     telemetry_config = load_telemetry_config(root / "configs/telemetry/default.yaml")
     faults = FaultConfig()
@@ -47,4 +47,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
