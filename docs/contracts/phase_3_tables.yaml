@@ -28,6 +28,7 @@ tables:
       corridor_margin_m: double
       keep_out_margin_m: double
       attitude_quaternion_body_to_lvlh_wxyz: array<double>[4]
+      target_attitude_quaternion_body_to_lvlh_wxyz: array<double>[4]
       angular_rate_body_rad_s: array<double>[3]
       port_separation_m: double
       port_lateral_offset_m: double

@@ -1,131 +1,318 @@
-"""Plotly/Dash mission replay application."""
+"""Plotly/Dash mission replay application with browser-local playback."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import numpy as np
+import pandas as pd
+
+from a3docklab.telemetry.contracts import BundleManifest
 from a3docklab.visualization.replay import ReplayStore
+
+DISPLAY_POINT_BUDGET = 2000
+TRUTH_COLUMNS = [
+    "event_time_ns",
+    "x_m",
+    "y_m",
+    "z_m",
+    "range_m",
+    "closing_rate_m_s",
+    "phase",
+    "propellant_used_kg",
+    "corridor_margin_m",
+    "keep_out_margin_m",
+    "chaser_qw",
+    "chaser_qx",
+    "chaser_qy",
+    "chaser_qz",
+    "target_qw",
+    "target_qx",
+    "target_qy",
+    "target_qz",
+]
+
+
+def _records(frame: pd.DataFrame) -> dict[str, list[Any]]:
+    return {name: frame[name].tolist() for name in frame.columns}
+
+
+def _optional_stream(
+    store: ReplayStore,
+    manifest: BundleManifest,
+    stream: str,
+    fallback: pd.DataFrame,
+) -> pd.DataFrame:
+    if stream not in {item.name for item in manifest.streams}:
+        return fallback
+    return store.query_stream(manifest.run_id, stream, max_points=DISPLAY_POINT_BUDGET)
+
+
+def load_replay_payload(
+    store: ReplayStore, manifest: BundleManifest
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load each display stream once and serialize it for browser-local replay."""
+    truth = store.query_stream(manifest.run_id, "truth", max_points=DISPLAY_POINT_BUDGET)
+    defaults: dict[str, Any] = {
+        "propellant_used_kg": 0.0,
+        "corridor_margin_m": 1.0,
+        "keep_out_margin_m": 1.0,
+        "chaser_qw": 1.0,
+        "chaser_qx": 0.0,
+        "chaser_qy": 0.0,
+        "chaser_qz": 0.0,
+        "target_qw": 1.0,
+        "target_qx": 0.0,
+        "target_qy": 0.0,
+        "target_qz": 0.0,
+    }
+    for column, default in defaults.items():
+        if column not in truth:
+            truth[column] = default
+    truth = truth[TRUTH_COLUMNS]
+    empty_health = truth[["event_time_ns"]].copy()
+    navigation_fallback = truth.rename(
+        columns={"x_m": "estimate_x_m", "y_m": "estimate_y_m", "z_m": "estimate_z_m"}
+    )
+    navigation = _optional_stream(store, manifest, "navigation_estimates", navigation_fallback)
+    actuation = _optional_stream(store, manifest, "actuation", empty_health)
+    communications = _optional_stream(store, manifest, "communications", empty_health)
+    if "command_response_residual_n" not in actuation:
+        actuation["command_response_residual_n"] = 0.0
+    if "data_age_ns" not in communications:
+        communications["data_age_ns"] = 0
+    events = _optional_stream(store, manifest, "events", pd.DataFrame())
+    payload = {
+        "run_id": manifest.run_id,
+        "scenario_id": manifest.scenario_id,
+        "terminal_phase": manifest.terminal_phase,
+        "schema_version": manifest.schema_version,
+        "truth": _records(truth),
+        "navigation": _records(navigation),
+        "actuation": _records(actuation),
+        "communications": _records(communications),
+        "events": _records(events),
+    }
+    options: list[dict[str, Any]] = []
+    if not events.empty:
+        for row in events.to_dict("records"):
+            time_s = int(row["event_time_ns"]) / 1_000_000_000
+            options.append(
+                {
+                    "label": f"{time_s:.1f}s · {row['event_type']} · {row['detail']}",
+                    "value": time_s,
+                }
+            )
+    return payload, options
+
+
+def _safety_geometry(truth: dict[str, list[Any]]) -> tuple[float, float, float]:
+    positions = np.column_stack((truth["x_m"], truth["y_m"], truth["z_m"]))
+    ranges = np.asarray(truth["range_m"], dtype=float)
+    keep_out = np.asarray(truth["keep_out_margin_m"], dtype=float)
+    radius = max(0.1, float(np.nanmedian(ranges - keep_out)))
+    lateral = np.linalg.norm(positions[:, 1:], axis=1)
+    allowed = lateral + np.asarray(truth["corridor_margin_m"], dtype=float)
+    axial = np.abs(positions[:, 0])
+    valid = axial > 1e-6
+    slope = float(np.nanmedian((allowed[valid] - np.nanmin(allowed)) / axial[valid]))
+    half_angle = float(np.clip(np.arctan(max(0.01, slope)), np.deg2rad(2), np.deg2rad(30)))
+    length = max(radius * 1.5, float(np.nanmax(ranges)))
+    direction = 1.0 if float(np.nanmedian(positions[:, 0])) >= 0 else -1.0
+    return radius, half_angle, direction * length
+
+
+def _trajectory_figure(go: Any, payload: dict[str, Any]) -> Any:
+    truth = payload["truth"]
+    navigation = payload["navigation"]
+    radius, half_angle, cone_length = _safety_geometry(truth)
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter3d(
+            x=truth["x_m"],
+            y=truth["y_m"],
+            z=truth["z_m"],
+            mode="lines",
+            name="Orion trail",
+            line={
+                "color": truth["closing_rate_m_s"],
+                "colorscale": "Turbo",
+                "width": 7,
+                "colorbar": {"title": "Closing<br>rate m/s", "thickness": 12},
+            },
+            customdata=np.column_stack((truth["phase"], truth["range_m"])),
+            hovertemplate="%{customdata[0]}<br>range %{customdata[1]:.2f} m<extra></extra>",
+        )
+    )
+    figure.add_trace(
+        go.Scatter3d(
+            x=[truth["x_m"][0]],
+            y=[truth["y_m"][0]],
+            z=[truth["z_m"][0]],
+            mode="markers",
+            name="Current position",
+            marker={"size": 9, "color": "#5ee7ff", "line": {"width": 3, "color": "white"}},
+        )
+    )
+    figure.add_trace(
+        go.Scatter3d(x=[0], y=[0], z=[0], mode="markers", name="Target", marker={"size": 8})
+    )
+    figure.add_trace(
+        go.Scatter3d(
+            x=navigation["estimate_x_m"],
+            y=navigation["estimate_y_m"],
+            z=navigation["estimate_z_m"],
+            mode="lines",
+            name="Navigation estimate",
+            line={"dash": "dot", "color": "#a8b2d1", "width": 3},
+        )
+    )
+    # Dynamic chaser and target docking axes; the browser updates their endpoints.
+    figure.add_trace(
+        go.Scatter3d(x=[truth["x_m"][0]] * 2, y=[0, 0], z=[0, 0], mode="lines", name="Chaser port axis", line={"color": "#5ee7ff", "width": 8})
+    )
+    figure.add_trace(
+        go.Scatter3d(x=[0, 1], y=[0, 0], z=[0, 0], mode="lines", name="Target port axis", line={"color": "#ffcf5c", "width": 8})
+    )
+    theta = np.linspace(0, 2 * np.pi, 30)
+    phi = np.linspace(0, np.pi, 18)
+    sx = radius * np.outer(np.cos(theta), np.sin(phi))
+    sy = radius * np.outer(np.sin(theta), np.sin(phi))
+    sz = radius * np.outer(np.ones_like(theta), np.cos(phi))
+    figure.add_trace(
+        go.Surface(
+            x=sx,
+            y=sy,
+            z=sz,
+            opacity=0.12,
+            showscale=False,
+            colorscale=[[0, "#3772ff"], [1, "#3772ff"]],
+            name="Keep-out zone",
+            hoverinfo="skip",
+        )
+    )
+    cone_x = np.linspace(0, cone_length, 22)
+    cone_theta = np.linspace(0, 2 * np.pi, 30)
+    cx, ct = np.meshgrid(cone_x, cone_theta)
+    cr = np.maximum(0.25, np.abs(cx) * np.tan(half_angle))
+    figure.add_trace(
+        go.Surface(
+            x=cx,
+            y=cr * np.cos(ct),
+            z=cr * np.sin(ct),
+            opacity=0.1,
+            showscale=False,
+            colorscale=[[0, "#21d19f"], [1, "#21d19f"]],
+            name="Approach corridor",
+            hoverinfo="skip",
+        )
+    )
+    figure.update_layout(
+        template="plotly_dark",
+        uirevision=f"trajectory-{payload['run_id']}",
+        scene={"aspectmode": "data", "xaxis_title": "LVLH X (m)", "yaxis_title": "LVLH Y (m)", "zaxis_title": "LVLH Z (m)"},
+        title="LVLH rendezvous twin",
+        margin={"l": 0, "r": 0, "t": 50, "b": 0},
+    )
+    return figure
+
+
+def _timeline_figure(go: Any, payload: dict[str, Any]) -> Any:
+    truth = payload["truth"]
+    time_s = np.asarray(truth["event_time_ns"], dtype=np.int64) / 1_000_000_000
+    figure = go.Figure()
+    figure.add_trace(go.Scatter(x=time_s, y=truth["range_m"], name="Range (m)"))
+    figure.add_trace(go.Scatter(x=time_s, y=truth["closing_rate_m_s"], name="Closing rate (m/s)", yaxis="y2"))
+    figure.update_layout(
+        template="plotly_dark",
+        uirevision=f"timeline-{payload['run_id']}",
+        title="Range and closing rate",
+        yaxis2={"overlaying": "y", "side": "right"},
+        shapes=[{"type": "line", "x0": 0, "x1": 0, "y0": 0, "y1": 1, "yref": "paper", "line": {"color": "#5ee7ff", "width": 2}}],
+    )
+    return figure
+
+
+def _health_figure(go: Any, payload: dict[str, Any]) -> Any:
+    actuation = payload["actuation"]
+    communications = payload["communications"]
+    figure = go.Figure()
+    figure.add_trace(go.Scatter(x=np.asarray(actuation["event_time_ns"]) / 1e9, y=actuation["command_response_residual_n"], name="Command/response residual (N)"))
+    figure.add_trace(go.Scatter(x=np.asarray(communications["event_time_ns"]) / 1e9, y=np.asarray(communications["data_age_ns"]) / 1e9, name="Communications age (s)", yaxis="y2"))
+    figure.update_layout(
+        template="plotly_dark",
+        uirevision=f"health-{payload['run_id']}",
+        title="Actuation and communications health",
+        yaxis2={"overlaying": "y", "side": "right"},
+        shapes=[{"type": "line", "x0": 0, "x1": 0, "y0": 0, "y1": 1, "yref": "paper", "line": {"color": "#5ee7ff", "width": 2}}],
+    )
+    return figure
 
 
 def create_app(store: ReplayStore) -> Any:
     try:
         import plotly.graph_objects as go  # type: ignore[import-untyped]
-        from dash import Dash, Input, Output, State, ctx, dcc, html
+        from dash import Dash, Input, Output, State, dcc, html
     except ImportError as exc:
         raise RuntimeError("The replay application requires the 'ui' optional dependency") from exc
 
     runs = store.list_runs()
-    app = Dash(__name__)
+    app = Dash(__name__, assets_folder=str(Path(__file__).with_name("assets")))
     app.title = "A3 DockLab Mission Replay"
     app.layout = html.Main(
         [
-            html.H1("A3 DockLab Mission Replay", style={"fontSize": "clamp(2rem, 5vw, 4rem)"}),
-            dcc.Dropdown(
-                id="run-selector",
-                options=[
-                    {"label": f"{run.scenario_id} · {run.run_id[-12:]}", "value": run.run_id}
-                    for run in runs
-                ],
-                value=runs[0].run_id if runs else None,
-                placeholder="Select a run",
-                style={"width": "100%"},
-            ),
-            dcc.Dropdown(
-                id="compare-selector",
-                options=[
-                    {
-                        "label": f"Compare: {run.scenario_id} · {run.run_id[-12:]}",
-                        "value": run.run_id,
-                    }
-                    for run in runs
-                ],
-                value=None,
-                placeholder="Optional comparison run",
-                style={"width": "100%", "marginTop": "8px"},
-            ),
-            html.Div(
-                [
-                    html.Button("Play", id="play-button", n_clicks=0),
-                    dcc.Dropdown(
-                        id="playback-speed",
-                        options=[
-                            {"label": f"{speed}×", "value": speed} for speed in (1, 5, 10, 50)
-                        ],
-                        value=10,
-                        clearable=False,
-                        style={"width": "100px", "display": "inline-block"},
-                    ),
-                    dcc.Dropdown(
-                        id="event-jump", placeholder="Jump to event", style={"minWidth": "360px"}
-                    ),
-                ],
-                style={
-                    "display": "flex",
-                    "gap": "12px",
-                    "alignItems": "center",
-                    "marginTop": "12px",
-                    "flexWrap": "wrap",
-                },
-            ),
-            html.Div(
-                dcc.Slider(id="time-slider", min=0.0, max=1.0, step=0.1, value=0.0),
-                style={"padding": "12px 8px 0"},
-            ),
-            dcc.Interval(id="playback-timer", interval=500, disabled=True),
-            html.Div(id="run-summary"),
+            dcc.Store(id="replay-data"),
+            dcc.Store(id="client-clock"),
+            html.H1("A3 DockLab Mission Replay"),
+            dcc.Dropdown(id="run-selector", options=[{"label": f"{run.scenario_id} · {run.run_id[-12:]}", "value": run.run_id} for run in runs], value=runs[0].run_id if runs else None, placeholder="Select a run"),
+            html.Div([html.Button("Play", id="play-button", n_clicks=0), dcc.Dropdown(id="playback-speed", options=[{"label": f"{speed}×", "value": speed} for speed in (1, 5, 10, 50)], value=10, clearable=False, style={"width": "100px"}), dcc.Dropdown(id="event-jump", placeholder="Jump to event", style={"minWidth": "360px"})], style={"display": "flex", "gap": "12px", "alignItems": "center", "marginTop": "12px", "flexWrap": "wrap"}),
+            dcc.Slider(id="time-slider", min=0.0, max=1.0, step=0.1, value=0.0),
+            dcc.Interval(id="playback-timer", interval=100, disabled=True),
+            html.Div(id="run-summary", className="kpi-strip"),
             dcc.Graph(id="trajectory-graph"),
             dcc.Graph(id="timeline-graph"),
             dcc.Graph(id="health-graph"),
             html.H2("Mission events"),
             html.Pre(id="event-list"),
         ],
-        style={
-            "maxWidth": "1400px",
-            "width": "100%",
-            "margin": "0 auto",
-            "padding": "16px",
-            "boxSizing": "border-box",
-            "overflowX": "hidden",
-            "fontFamily": "system-ui",
-        },
+        style={"maxWidth": "1400px", "width": "100%", "margin": "0 auto", "padding": "16px", "fontFamily": "system-ui"},
     )
 
     @app.callback(
+        Output("replay-data", "data"),
         Output("time-slider", "max"),
         Output("time-slider", "value"),
         Output("event-jump", "options"),
+        Output("trajectory-graph", "figure"),
+        Output("timeline-graph", "figure"),
+        Output("health-graph", "figure"),
+        Output("event-list", "children"),
         Input("run-selector", "value"),
     )
-    def configure_replay(run_id: str | None) -> tuple[float, float, list[dict[str, Any]]]:
+    def configure_replay(run_id: str | None) -> tuple[Any, ...]:
         if run_id is None:
-            return 1.0, 0.0, []
-        truth = store.query_stream(run_id, "truth", columns=["event_time_ns"])
-        events = store.query_stream(run_id, "events")
-        maximum = float(truth["event_time_ns"].to_numpy(dtype="int64")[-1] / 1_000_000_000)
-        event_times = events["event_time_ns"].to_numpy(dtype="int64")
-        event_types = events["event_type"].astype(str).tolist()
-        event_details = events["detail"].astype(str).tolist()
-        options = [
-            {
-                "label": f"{time_ns / 1_000_000_000:.1f}s · {event_type} · {detail}",
-                "value": time_ns / 1_000_000_000,
-            }
-            for time_ns, event_type, detail in zip(
-                event_times, event_types, event_details, strict=True
-            )
-        ]
-        return maximum, 0.0, options
+            empty = go.Figure().update_layout(template="plotly_dark", uirevision="empty")
+            return None, 1.0, 0.0, [], empty, empty, empty, ""
+        manifest = next(run for run in runs if run.run_id == run_id)
+        payload, options = load_replay_payload(store, manifest)
+        maximum = int(payload["truth"]["event_time_ns"][-1]) / 1_000_000_000
+        event_text = "\n".join(option["label"] for option in options)
+        return payload, maximum, 0.0, options, _trajectory_figure(go, payload), _timeline_figure(go, payload), _health_figure(go, payload), event_text
 
-    @app.callback(
+    app.clientside_callback(
+        """function(clicks) { const playing = (clicks || 0) % 2 === 1; return [!playing, playing ? 'Pause' : 'Play']; }""",
         Output("playback-timer", "disabled"),
         Output("play-button", "children"),
         Input("play-button", "n_clicks"),
     )
-    def toggle_playback(clicks: int) -> tuple[bool, str]:
-        playing = clicks % 2 == 1
-        return not playing, "Pause" if playing else "Play"
-
-    @app.callback(
+    app.clientside_callback(
+        """function(ticks, eventTime, current, maximum, speed) {
+            const trigger = dash_clientside.callback_context.triggered_id;
+            if (trigger === 'event-jump' && eventTime !== null) return eventTime;
+            if (trigger !== 'playback-timer') return dash_clientside.no_update;
+            return Math.min(maximum || 0, (current || 0) + 0.1 * (speed || 1));
+        }""",
         Output("time-slider", "value", allow_duplicate=True),
         Input("playback-timer", "n_intervals"),
         Input("event-jump", "value"),
@@ -134,132 +321,10 @@ def create_app(store: ReplayStore) -> Any:
         State("playback-speed", "value"),
         prevent_initial_call=True,
     )
-    def advance_replay(
-        _ticks: int,
-        event_time_s: float | None,
-        current_s: float,
-        maximum_s: float,
-        speed: int,
-    ) -> float:
-        if ctx.triggered_id == "event-jump" and event_time_s is not None:
-            return event_time_s
-        return min(maximum_s, current_s + 0.5 * speed)
-
-    @app.callback(
+    app.clientside_callback(
+        """function(time, data) { return window.dash_clientside.a3docklab.renderTime(time, data); }""",
         Output("run-summary", "children"),
-        Output("trajectory-graph", "figure"),
-        Output("timeline-graph", "figure"),
-        Output("health-graph", "figure"),
-        Output("event-list", "children"),
-        Input("run-selector", "value"),
         Input("time-slider", "value"),
-        Input("compare-selector", "value"),
+        State("replay-data", "data"),
     )
-    def render_run(
-        run_id: str | None, current_time_s: float, compare_run_id: str | None
-    ) -> tuple[Any, Any, Any, Any, str]:
-        if run_id is None:
-            empty = go.Figure().update_layout(template="plotly_dark")
-            return "No run selected", empty, empty, empty, ""
-        manifest = next(run for run in store.list_runs() if run.run_id == run_id)
-        end_ns = int(current_time_s * 1_000_000_000)
-        truth = store.query_stream(run_id, "truth", end_ns=end_ns, max_points=2000)
-        available = {stream.name for stream in manifest.streams}
-        if "navigation_estimates" in available:
-            navigation = store.query_stream(
-                run_id, "navigation_estimates", end_ns=end_ns, max_points=2000
-            )
-        else:
-            navigation = truth.rename(
-                columns={"x_m": "estimate_x_m", "y_m": "estimate_y_m", "z_m": "estimate_z_m"}
-            )
-        if "actuation" in available:
-            actuation = store.query_stream(run_id, "actuation", end_ns=end_ns, max_points=2000)
-        else:
-            actuation = truth[["event_time_ns"]].copy()
-            actuation["command_response_residual_n"] = 0.0
-        if "communications" in available:
-            communications = store.query_stream(
-                run_id, "communications", end_ns=end_ns, max_points=2000
-            )
-        else:
-            communications = truth[["event_time_ns"]].copy()
-            communications["data_age_ns"] = 0
-        events = store.query_stream(run_id, "events")
-        trajectory = go.Figure(
-            go.Scatter3d(x=truth["x_m"], y=truth["y_m"], z=truth["z_m"], mode="lines", name="Orion")
-        )
-        trajectory.add_trace(go.Scatter3d(x=[0], y=[0], z=[0], mode="markers", name="Target"))
-        trajectory.add_trace(
-            go.Scatter3d(
-                x=navigation["estimate_x_m"],
-                y=navigation["estimate_y_m"],
-                z=navigation["estimate_z_m"],
-                mode="lines",
-                name="Navigation estimate",
-                line={"dash": "dot"},
-            )
-        )
-        trajectory.update_layout(
-            template="plotly_dark", scene_aspectmode="data", title="LVLH trajectory"
-        )
-        timeline = go.Figure()
-        time_s = truth["event_time_ns"] / 1_000_000_000
-        timeline.add_trace(go.Scatter(x=time_s, y=truth["range_m"], name="Range (m)"))
-        timeline.add_trace(
-            go.Scatter(x=time_s, y=truth["closing_rate_m_s"], name="Closing rate (m/s)", yaxis="y2")
-        )
-        if compare_run_id is not None and compare_run_id != run_id:
-            comparison = store.query_stream(compare_run_id, "truth", end_ns=end_ns, max_points=2000)
-            comparison_time_s = comparison["event_time_ns"] / 1_000_000_000
-            timeline.add_trace(
-                go.Scatter(
-                    x=comparison_time_s,
-                    y=comparison["range_m"],
-                    name="Comparison range (m)",
-                    line={"dash": "dash"},
-                )
-            )
-        timeline.update_layout(
-            template="plotly_dark",
-            title="Range and closing rate",
-            yaxis2={"overlaying": "y", "side": "right"},
-        )
-        health = go.Figure()
-        health.add_trace(
-            go.Scatter(
-                x=actuation["event_time_ns"] / 1_000_000_000,
-                y=actuation["command_response_residual_n"],
-                name="Command/response residual (N)",
-            )
-        )
-        health.add_trace(
-            go.Scatter(
-                x=communications["event_time_ns"] / 1_000_000_000,
-                y=communications["data_age_ns"] / 1_000_000_000,
-                name="Communications age (s)",
-                yaxis="y2",
-            )
-        )
-        health.update_layout(
-            template="plotly_dark",
-            title="Actuation and communications health",
-            yaxis2={"overlaying": "y", "side": "right"},
-        )
-        summary = (
-            f"{manifest.scenario_id} · terminal phase: {manifest.terminal_phase} · "
-            f"schema {manifest.schema_version} · replay time {current_time_s:.1f}s · "
-            f"phase {truth['phase'].iat[-1]}"
-        )
-        event_times = events["event_time_ns"].to_numpy(dtype="int64")
-        event_types = events["event_type"].astype(str).tolist()
-        event_details = events["detail"].astype(str).tolist()
-        event_text = "\n".join(
-            f"{time_ns / 1_000_000_000:8.1f}s  {event_type:26s} {detail}"
-            for time_ns, event_type, detail in zip(
-                event_times, event_types, event_details, strict=True
-            )
-        )
-        return summary, trajectory, timeline, health, event_text
-
     return app
