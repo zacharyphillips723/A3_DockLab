@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -37,6 +37,14 @@ from a3docklab.dynamics.docking_contact import CaptureLatchResult, latch_capture
 from a3docklab.guidance.profiles import axis_index, commanded_velocity
 from a3docklab.run_metadata import deterministic_run_id
 from a3docklab.safety.monitor import evaluate_safety
+from a3docklab.simulation.commands import (
+    CommandArbiter,
+    CommandDecision,
+    ControlIntent,
+    DecisionStatus,
+    IntentMode,
+    SimulationObservation,
+)
 from a3docklab.simulation.phases import MissionPhase, PhaseMachine
 
 
@@ -61,6 +69,7 @@ class SimulationFrame:
 
     state: dict[str, object]
     events: tuple[dict[str, object], ...] = ()
+    decision: CommandDecision | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +80,7 @@ class SimulationCheckpoint:
     step_index: int
     time_s: float
     state: dict[str, object]
+    intents: tuple[ControlIntent | None, ...] = ()
 
 
 def run_cw(config: SimulationConfig) -> SimulationResult:
@@ -135,7 +145,10 @@ def _attitude_rk4_step(
     return result
 
 
-def _controlled_frames(config: SimulationConfig) -> Iterator[SimulationFrame]:
+def _controlled_frames(
+    config: SimulationConfig,
+    command_resolver: Callable[[SimulationObservation, np.ndarray], CommandDecision] | None = None,
+) -> Iterator[SimulationFrame]:
     """Yield a phase-controlled mission one observable integration frame at a time."""
     if config.fidelity != "cw":
         raise ValueError("controlled simulation currently requires fidelity='cw'")
@@ -431,6 +444,39 @@ def _controlled_frames(config: SimulationConfig) -> Iterator[SimulationFrame]:
         desired_velocity = commanded_velocity(
             state[:3], machine.phase, config.guidance, config.safety, abort_mode
         )
+        observation = SimulationObservation(
+            run_id=run_id,
+            time_s=float(time_s),
+            phase=machine.phase.value,
+            position_m=(float(state[0]), float(state[1]), float(state[2])),
+            velocity_m_s=(float(state[3]), float(state[4]), float(state[5])),
+            fuel_mass_kg=fuel_mass_kg,
+            closing_rate_m_s=safety.closing_rate_m_s,
+            closing_rate_limit_m_s=safety.closing_rate_limit_m_s,
+            corridor_margin_m=safety.corridor_margin_m,
+            keep_out_margin_m=safety.keep_out_margin_m,
+            capture_eligible=safety.capture_eligible,
+        )
+        decision = command_resolver(observation, desired_velocity) if command_resolver else None
+        if decision is not None:
+            desired_velocity = np.asarray(decision.executed_velocity_m_s, dtype=np.float64)
+            if (
+                decision.requested_mode == IntentMode.ABORT
+                and decision.status != DecisionStatus.REJECTED
+                and machine.phase != MissionPhase.ABORT
+            ):
+                previous_phase = machine.phase
+                machine.transition(MissionPhase.ABORT, float(time_s))
+                abort_mode = "retreat"
+                events.append(
+                    {
+                        "run_id": run_id,
+                        "time_s": float(time_s),
+                        "event_type": "operator_abort",
+                        "phase": machine.phase.value,
+                        "detail": f"{previous_phase.value}->abort:{decision.command_id}",
+                    }
+                )
         requested_acceleration = commanded_acceleration(
             state, desired_velocity, n_rad_s, config.controller
         )
@@ -451,6 +497,8 @@ def _controlled_frames(config: SimulationConfig) -> Iterator[SimulationFrame]:
         )
         if capture_result is not None and handoff.state != HandoffState.ACTIVE:
             attitude_torque_n_m = np.zeros(3)
+        elif decision is not None and decision.executed_torque_n_m is not None:
+            attitude_torque_n_m = np.asarray(decision.executed_torque_n_m, dtype=np.float64)
         if capture_result is not None:
             orion_shadow = shadow_stack_wrench(
                 stack_velocity,
@@ -719,6 +767,44 @@ def _controlled_frames(config: SimulationConfig) -> Iterator[SimulationFrame]:
                 "port_angular_error_deg": safety.docking_alignment.angular_error_deg,
                 "port_clocking_error_deg": safety.docking_alignment.clocking_error_deg,
                 "capture_eligible": safety.capture_eligible,
+                "command_id": decision.command_id if decision else "",
+                "command_driver_id": decision.driver_id if decision else "reference-autopilot",
+                "command_driver_kind": (
+                    decision.driver_kind.value if decision else "autopilot"
+                ),
+                "command_requested_mode": (
+                    decision.requested_mode.value if decision else "autopilot"
+                ),
+                "command_decision_status": (
+                    decision.status.value if decision else "accepted"
+                ),
+                "command_decision_reason": (
+                    decision.reason if decision else "reference_autopilot"
+                ),
+                "command_requested_vx_m_s": (
+                    decision.requested_velocity_m_s[0] if decision else desired_velocity[0]
+                ),
+                "command_requested_vy_m_s": (
+                    decision.requested_velocity_m_s[1] if decision else desired_velocity[1]
+                ),
+                "command_requested_vz_m_s": (
+                    decision.requested_velocity_m_s[2] if decision else desired_velocity[2]
+                ),
+                "command_executed_vx_m_s": desired_velocity[0],
+                "command_executed_vy_m_s": desired_velocity[1],
+                "command_executed_vz_m_s": desired_velocity[2],
+                "command_requested_tx_n_m": (
+                    decision.requested_torque_n_m[0] if decision else attitude_torque_n_m[0]
+                ),
+                "command_requested_ty_n_m": (
+                    decision.requested_torque_n_m[1] if decision else attitude_torque_n_m[1]
+                ),
+                "command_requested_tz_n_m": (
+                    decision.requested_torque_n_m[2] if decision else attitude_torque_n_m[2]
+                ),
+                "command_executed_tx_n_m": attitude_torque_n_m[0],
+                "command_executed_ty_n_m": attitude_torque_n_m[1],
+                "command_executed_tz_n_m": attitude_torque_n_m[2],
             }
         abort_response_complete = (
             machine.phase == MissionPhase.ABORT
@@ -741,6 +827,7 @@ def _controlled_frames(config: SimulationConfig) -> Iterator[SimulationFrame]:
         yield SimulationFrame(
             state=row,
             events=tuple(deepcopy(event) for event in events[event_start:]),
+            decision=decision,
         )
         if machine.phase == MissionPhase.COMPLETE or abort_response_complete:
             break
@@ -769,18 +856,23 @@ def _controlled_frames(config: SimulationConfig) -> Iterator[SimulationFrame]:
 class SimulationSession:
     """Persistent, step-driven facade over the deterministic controlled mission."""
 
-    def __init__(self, config: SimulationConfig) -> None:
+    def __init__(
+        self, config: SimulationConfig, *, authorized_driver_id: str | None = None
+    ) -> None:
         if config.fidelity != "cw":
             raise ValueError("controlled simulation currently requires fidelity='cw'")
         self.config = config
         self.run_id = deterministic_run_id(config)
+        self.arbiter = CommandArbiter(config, authorized_driver_id)
+        self._pending_intent: ControlIntent | None = None
         self.reset()
 
     def reset(self) -> None:
         """Reset the session to its reproducible pre-step state."""
-        self._frames = _controlled_frames(self.config)
+        self._frames = _controlled_frames(self.config, self._resolve_command)
         self._rows: list[dict[str, object]] = []
         self._events: list[dict[str, object]] = []
+        self._intents: list[ControlIntent | None] = []
         self._paused = True
         self._complete = False
 
@@ -802,6 +894,11 @@ class SimulationSession:
             return None
         return SimulationFrame(deepcopy(self._rows[-1]), ())
 
+    def _resolve_command(
+        self, observation: SimulationObservation, autopilot_velocity: np.ndarray
+    ) -> CommandDecision:
+        return self.arbiter.decide(observation, autopilot_velocity, self._pending_intent)
+
     def pause(self) -> None:
         self._paused = True
 
@@ -809,10 +906,11 @@ class SimulationSession:
         if not self._complete:
             self._paused = False
 
-    def step(self) -> SimulationFrame:
+    def step(self, intent: ControlIntent | None = None) -> SimulationFrame:
         """Advance exactly one integration frame, including while paused."""
         if self._complete:
             raise StopIteration("simulation session is complete")
+        self._pending_intent = intent
         try:
             frame = next(self._frames)
         except StopIteration:
@@ -820,12 +918,15 @@ class SimulationSession:
             raise
         self._rows.append(deepcopy(frame.state))
         self._events.extend(deepcopy(event) for event in frame.events)
+        self._intents.append(intent)
         terminal = str(frame.state["phase"]) == MissionPhase.COMPLETE.value
         aborted = any(event["event_type"] == "abort_response_complete" for event in frame.events)
         self._complete = terminal or aborted
         if self._complete:
             self._paused = True
-        return SimulationFrame(deepcopy(frame.state), tuple(deepcopy(frame.events)))
+        return SimulationFrame(
+            deepcopy(frame.state), tuple(deepcopy(frame.events)), frame.decision
+        )
 
     def advance(self, steps: int = 1) -> list[SimulationFrame]:
         """Advance a running session by at most ``steps`` frames."""
@@ -858,6 +959,7 @@ class SimulationSession:
             step_index=self.step_index,
             time_s=float(state["time_s"]),
             state=state,
+            intents=tuple(self._intents),
         )
 
     def restore(self, checkpoint: SimulationCheckpoint) -> SimulationFrame:
@@ -866,8 +968,11 @@ class SimulationSession:
             raise ValueError("checkpoint belongs to a different simulation configuration")
         self.reset()
         frame: SimulationFrame | None = None
-        for _ in range(checkpoint.step_index + 1):
-            frame = self.step()
+        intents = checkpoint.intents or (None,) * (checkpoint.step_index + 1)
+        if len(intents) != checkpoint.step_index + 1:
+            raise ValueError("checkpoint command log length does not match its step index")
+        for intent in intents:
+            frame = self.step(intent)
         if frame is None:
             raise ValueError("checkpoint does not contain a simulation frame")
         try:
