@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from copy import deepcopy
 from dataclasses import dataclass
 
 import numpy as np
@@ -51,6 +53,24 @@ class MissionSummary:
     propellant_used_kg: float
     closest_approach_m: float
     warning_count: int
+
+
+@dataclass(frozen=True)
+class SimulationFrame:
+    """One observable integration frame and the events emitted during it."""
+
+    state: dict[str, object]
+    events: tuple[dict[str, object], ...] = ()
+
+
+@dataclass(frozen=True)
+class SimulationCheckpoint:
+    """Portable deterministic restore point for a controlled session."""
+
+    run_id: str
+    step_index: int
+    time_s: float
+    state: dict[str, object]
 
 
 def run_cw(config: SimulationConfig) -> SimulationResult:
@@ -115,8 +135,8 @@ def _attitude_rk4_step(
     return result
 
 
-def run_controlled(config: SimulationConfig) -> SimulationResult:
-    """Run a phase-controlled CW rendezvous with independent safety monitoring."""
+def _controlled_frames(config: SimulationConfig) -> Iterator[SimulationFrame]:
+    """Yield a phase-controlled mission one observable integration frame at a time."""
     if config.fidelity != "cw":
         raise ValueError("controlled simulation currently requires fidelity='cw'")
     n_rad_s = mean_motion(config.orbit.earth_mu_m3_s2, config.orbit.semi_major_axis_m)
@@ -126,7 +146,6 @@ def run_controlled(config: SimulationConfig) -> SimulationResult:
     initial_fuel_mass_kg = fuel_mass_kg
     target_fuel_mass_kg = config.target.mass_kg
     initial_target_fuel_mass_kg = target_fuel_mass_kg
-    rows: list[dict[str, object]] = []
     events: list[dict[str, object]] = []
     run_id = deterministic_run_id(config)
     abort_mode = ""
@@ -172,6 +191,7 @@ def run_controlled(config: SimulationConfig) -> SimulationResult:
     active_owner_failure_injected = False
 
     for time_s in np.arange(0.0, config.duration_s + 0.5 * config.step_s, config.step_s):
+        event_start = len(events)
         if handoff.state == HandoffState.ROLLBACK:
             observed_orion_authority = True
             observed_target_authority = False
@@ -519,8 +539,7 @@ def run_controlled(config: SimulationConfig) -> SimulationResult:
             MissionPhase.DOCKED_STACK_CONTROL,
             MissionPhase.COMPLETE,
         }
-        rows.append(
-            {
+        row = {
                 "run_id": run_id,
                 "time_s": float(time_s),
                 "scenario": config.name,
@@ -701,7 +720,6 @@ def run_controlled(config: SimulationConfig) -> SimulationResult:
                 "port_clocking_error_deg": safety.docking_alignment.clocking_error_deg,
                 "capture_eligible": safety.capture_eligible,
             }
-        )
         abort_response_complete = (
             machine.phase == MissionPhase.ABORT
             and float(time_s) > machine.entered_at_s
@@ -720,6 +738,10 @@ def run_controlled(config: SimulationConfig) -> SimulationResult:
                     "detail": abort_mode,
                 }
             )
+        yield SimulationFrame(
+            state=row,
+            events=tuple(deepcopy(event) for event in events[event_start:]),
+        )
         if machine.phase == MissionPhase.COMPLETE or abort_response_complete:
             break
         if capture_result is None:
@@ -742,7 +764,130 @@ def run_controlled(config: SimulationConfig) -> SimulationResult:
             )
             stack_angular_rate = stack_angular_rate + angular_acceleration * config.step_s
 
-    return SimulationResult(telemetry=pd.DataFrame(rows), events=pd.DataFrame(events))
+
+
+class SimulationSession:
+    """Persistent, step-driven facade over the deterministic controlled mission."""
+
+    def __init__(self, config: SimulationConfig) -> None:
+        if config.fidelity != "cw":
+            raise ValueError("controlled simulation currently requires fidelity='cw'")
+        self.config = config
+        self.run_id = deterministic_run_id(config)
+        self.reset()
+
+    def reset(self) -> None:
+        """Reset the session to its reproducible pre-step state."""
+        self._frames = _controlled_frames(self.config)
+        self._rows: list[dict[str, object]] = []
+        self._events: list[dict[str, object]] = []
+        self._paused = True
+        self._complete = False
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    @property
+    def complete(self) -> bool:
+        return self._complete
+
+    @property
+    def step_index(self) -> int:
+        return len(self._rows) - 1
+
+    @property
+    def current(self) -> SimulationFrame | None:
+        if not self._rows:
+            return None
+        return SimulationFrame(deepcopy(self._rows[-1]), ())
+
+    def pause(self) -> None:
+        self._paused = True
+
+    def resume(self) -> None:
+        if not self._complete:
+            self._paused = False
+
+    def step(self) -> SimulationFrame:
+        """Advance exactly one integration frame, including while paused."""
+        if self._complete:
+            raise StopIteration("simulation session is complete")
+        try:
+            frame = next(self._frames)
+        except StopIteration:
+            self._complete = True
+            raise
+        self._rows.append(deepcopy(frame.state))
+        self._events.extend(deepcopy(event) for event in frame.events)
+        terminal = str(frame.state["phase"]) == MissionPhase.COMPLETE.value
+        aborted = any(event["event_type"] == "abort_response_complete" for event in frame.events)
+        self._complete = terminal or aborted
+        if self._complete:
+            self._paused = True
+        return SimulationFrame(deepcopy(frame.state), tuple(deepcopy(frame.events)))
+
+    def advance(self, steps: int = 1) -> list[SimulationFrame]:
+        """Advance a running session by at most ``steps`` frames."""
+        if steps < 1:
+            raise ValueError("steps must be positive")
+        if self._paused:
+            return []
+        frames: list[SimulationFrame] = []
+        for _ in range(steps):
+            if self._complete:
+                break
+            try:
+                frames.append(self.step())
+            except StopIteration:
+                break
+        return frames
+
+    def run_to_completion(self) -> SimulationResult:
+        self.resume()
+        while not self._complete:
+            self.advance(steps=1024)
+        return self.result()
+
+    def checkpoint(self) -> SimulationCheckpoint:
+        if not self._rows:
+            raise RuntimeError("step the session before creating a checkpoint")
+        state = deepcopy(self._rows[-1])
+        return SimulationCheckpoint(
+            run_id=self.run_id,
+            step_index=self.step_index,
+            time_s=float(state["time_s"]),
+            state=state,
+        )
+
+    def restore(self, checkpoint: SimulationCheckpoint) -> SimulationFrame:
+        """Restore by deterministic replay to a validated checkpoint."""
+        if checkpoint.run_id != self.run_id:
+            raise ValueError("checkpoint belongs to a different simulation configuration")
+        self.reset()
+        frame: SimulationFrame | None = None
+        for _ in range(checkpoint.step_index + 1):
+            frame = self.step()
+        if frame is None:
+            raise ValueError("checkpoint does not contain a simulation frame")
+        try:
+            pd.testing.assert_series_equal(
+                pd.Series(frame.state), pd.Series(checkpoint.state), check_names=False
+            )
+        except AssertionError as error:
+            raise ValueError("checkpoint state does not match deterministic replay") from error
+        return frame
+
+    def result(self) -> SimulationResult:
+        return SimulationResult(
+            telemetry=pd.DataFrame(deepcopy(self._rows)),
+            events=pd.DataFrame(deepcopy(self._events)),
+        )
+
+
+def run_controlled(config: SimulationConfig) -> SimulationResult:
+    """Run the step-driven controlled mission to completion."""
+    return SimulationSession(config).run_to_completion()
 
 
 def summarize(result: SimulationResult) -> MissionSummary:
