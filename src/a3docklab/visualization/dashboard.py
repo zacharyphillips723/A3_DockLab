@@ -170,10 +170,24 @@ def _trajectory_figure(go: Any, payload: dict[str, Any]) -> Any:
     )
     # Dynamic chaser and target docking axes; the browser updates their endpoints.
     figure.add_trace(
-        go.Scatter3d(x=[truth["x_m"][0]] * 2, y=[0, 0], z=[0, 0], mode="lines", name="Chaser port axis", line={"color": "#5ee7ff", "width": 8})
+        go.Scatter3d(
+            x=[truth["x_m"][0]] * 2,
+            y=[0, 0],
+            z=[0, 0],
+            mode="lines",
+            name="Chaser port axis",
+            line={"color": "#5ee7ff", "width": 8},
+        )
     )
     figure.add_trace(
-        go.Scatter3d(x=[0, 1], y=[0, 0], z=[0, 0], mode="lines", name="Target port axis", line={"color": "#ffcf5c", "width": 8})
+        go.Scatter3d(
+            x=[0, 1],
+            y=[0, 0],
+            z=[0, 0],
+            mode="lines",
+            name="Target port axis",
+            line={"color": "#ffcf5c", "width": 8},
+        )
     )
     theta = np.linspace(0, 2 * np.pi, 30)
     phi = np.linspace(0, np.pi, 18)
@@ -211,7 +225,12 @@ def _trajectory_figure(go: Any, payload: dict[str, Any]) -> Any:
     figure.update_layout(
         template="plotly_dark",
         uirevision=f"trajectory-{payload['run_id']}",
-        scene={"aspectmode": "data", "xaxis_title": "LVLH X (m)", "yaxis_title": "LVLH Y (m)", "zaxis_title": "LVLH Z (m)"},
+        scene={
+            "aspectmode": "data",
+            "xaxis_title": "LVLH X (m)",
+            "yaxis_title": "LVLH Y (m)",
+            "zaxis_title": "LVLH Z (m)",
+        },
         title="LVLH rendezvous twin",
         margin={"l": 0, "r": 0, "t": 50, "b": 0},
     )
@@ -223,13 +242,25 @@ def _timeline_figure(go: Any, payload: dict[str, Any]) -> Any:
     time_s = np.asarray(truth["event_time_ns"], dtype=np.int64) / 1_000_000_000
     figure = go.Figure()
     figure.add_trace(go.Scatter(x=time_s, y=truth["range_m"], name="Range (m)"))
-    figure.add_trace(go.Scatter(x=time_s, y=truth["closing_rate_m_s"], name="Closing rate (m/s)", yaxis="y2"))
+    figure.add_trace(
+        go.Scatter(x=time_s, y=truth["closing_rate_m_s"], name="Closing rate (m/s)", yaxis="y2")
+    )
     figure.update_layout(
         template="plotly_dark",
         uirevision=f"timeline-{payload['run_id']}",
         title="Range and closing rate",
         yaxis2={"overlaying": "y", "side": "right"},
-        shapes=[{"type": "line", "x0": 0, "x1": 0, "y0": 0, "y1": 1, "yref": "paper", "line": {"color": "#5ee7ff", "width": 2}}],
+        shapes=[
+            {
+                "type": "line",
+                "x0": 0,
+                "x1": 0,
+                "y0": 0,
+                "y1": 1,
+                "yref": "paper",
+                "line": {"color": "#5ee7ff", "width": 2},
+            }
+        ],
     )
     return figure
 
@@ -238,19 +269,42 @@ def _health_figure(go: Any, payload: dict[str, Any]) -> Any:
     actuation = payload["actuation"]
     communications = payload["communications"]
     figure = go.Figure()
-    figure.add_trace(go.Scatter(x=np.asarray(actuation["event_time_ns"]) / 1e9, y=actuation["command_response_residual_n"], name="Command/response residual (N)"))
-    figure.add_trace(go.Scatter(x=np.asarray(communications["event_time_ns"]) / 1e9, y=np.asarray(communications["data_age_ns"]) / 1e9, name="Communications age (s)", yaxis="y2"))
+    figure.add_trace(
+        go.Scatter(
+            x=np.asarray(actuation["event_time_ns"]) / 1e9,
+            y=actuation["command_response_residual_n"],
+            name="Command/response residual (N)",
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=np.asarray(communications["event_time_ns"]) / 1e9,
+            y=np.asarray(communications["data_age_ns"]) / 1e9,
+            name="Communications age (s)",
+            yaxis="y2",
+        )
+    )
     figure.update_layout(
         template="plotly_dark",
         uirevision=f"health-{payload['run_id']}",
         title="Actuation and communications health",
         yaxis2={"overlaying": "y", "side": "right"},
-        shapes=[{"type": "line", "x0": 0, "x1": 0, "y0": 0, "y1": 1, "yref": "paper", "line": {"color": "#5ee7ff", "width": 2}}],
+        shapes=[
+            {
+                "type": "line",
+                "x0": 0,
+                "x1": 0,
+                "y0": 0,
+                "y1": 1,
+                "yref": "paper",
+                "line": {"color": "#5ee7ff", "width": 2},
+            }
+        ],
     )
     return figure
 
 
-def create_app(store: ReplayStore) -> Any:
+def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None = None) -> Any:
     try:
         import plotly.graph_objects as go  # type: ignore[import-untyped]
         from dash import Dash, Input, Output, State, dcc, html
@@ -260,13 +314,203 @@ def create_app(store: ReplayStore) -> Any:
     runs = store.list_runs()
     app = Dash(__name__, assets_folder=str(Path(__file__).with_name("assets")))
     app.title = "A3 DockLab Mission Replay"
-    app.layout = html.Main(
+    empty_live = go.Figure()
+    empty_live.add_trace(
+        go.Scatter3d(
+            x=[],
+            y=[],
+            z=[],
+            mode="lines",
+            name="Driven trajectory",
+            line={"color": "#5ee7ff", "width": 7},
+        )
+    )
+    empty_live.add_trace(
+        go.Scatter3d(
+            x=[],
+            y=[],
+            z=[],
+            mode="markers",
+            name="Vehicle",
+            marker={"size": 10, "color": "#5ee7ff", "line": {"color": "white", "width": 2}},
+        )
+    )
+    empty_live.add_trace(
+        go.Scatter3d(
+            x=[0],
+            y=[0],
+            z=[0],
+            mode="markers",
+            name="Target",
+            marker={"size": 8, "color": "#ffcf5c"},
+        )
+    )
+    empty_live.update_layout(
+        template="plotly_dark",
+        uirevision="live-twin",
+        title="Live LVLH docking twin",
+        scene={
+            "aspectmode": "data",
+            "xaxis_title": "LVLH X (m)",
+            "yaxis_title": "LVLH Y (m)",
+            "zaxis_title": "LVLH Z (m)",
+        },
+        margin={"l": 0, "r": 0, "t": 50, "b": 0},
+    )
+    empty_live_history = go.Figure()
+    empty_live_history.add_trace(go.Scatter(x=[], y=[], name="Range (m)"))
+    empty_live_history.add_trace(go.Scatter(x=[], y=[], name="Closing rate (m/s)", yaxis="y2"))
+    empty_live_history.update_layout(
+        template="plotly_dark",
+        uirevision="live-history",
+        title="Live state history",
+        yaxis2={"overlaying": "y", "side": "right"},
+    )
+    live_scenarios = live_scenarios or []
+    live_layout = html.Div(
         [
-            dcc.Store(id="replay-data"),
-            dcc.Store(id="client-clock"),
-            html.H1("A3 DockLab Mission Replay"),
-            dcc.Dropdown(id="run-selector", options=[{"label": f"{run.scenario_id} · {run.run_id[-12:]}", "value": run.run_id} for run in runs], value=runs[0].run_id if runs else None, placeholder="Select a run"),
-            html.Div([html.Button("Play", id="play-button", n_clicks=0), dcc.Dropdown(id="playback-speed", options=[{"label": f"{speed}×", "value": speed} for speed in (1, 5, 10, 50)], value=10, clearable=False, style={"width": "100px"}), dcc.Dropdown(id="event-jump", placeholder="Jump to event", style={"minWidth": "360px"})], style={"display": "flex", "gap": "12px", "alignItems": "center", "marginTop": "12px", "flexWrap": "wrap"}),
+            html.Div(
+                [
+                    html.H2("Live Lab"),
+                    html.P(
+                        "Drive the deterministic docking simulation through the guarded command arbiter."
+                    ),
+                    html.Label("Scenario"),
+                    html.Select(
+                        id="live-scenario",
+                        children=[
+                            html.Option(item["name"], value=item["id"], selected=index == 0)
+                            for index, item in enumerate(live_scenarios)
+                        ],
+                    ),
+                    html.Button("Create session", id="live-create", className="primary-control"),
+                    html.Label("Deterministic fault injection"),
+                    html.Select(
+                        id="live-fault",
+                        children=[
+                            html.Option(label, value=value, selected=value == "none")
+                            for value, label in (
+                                ("none", "None"),
+                                ("stale_data", "Stale exchange data"),
+                                ("frame_mismatch", "Frame mismatch"),
+                                ("actuator_unhealthy", "Actuator unhealthy"),
+                                ("lost_acknowledgement", "Lost acknowledgement"),
+                                ("duplicated_authority", "Duplicated authority"),
+                                ("lost_authority", "Lost authority"),
+                                ("shadow_command_mismatch", "Shadow command mismatch"),
+                                ("active_owner_failure", "Active owner failure"),
+                            )
+                        ],
+                    ),
+                    html.Div(
+                        [
+                            html.Button("Run", id="live-resume"),
+                            html.Button("Pause", id="live-pause"),
+                            html.Button("Step", id="live-step"),
+                            html.Button("Reset", id="live-reset"),
+                            html.Button(
+                                "Terminate", id="live-terminate", className="danger-control"
+                            ),
+                        ],
+                        className="control-row",
+                    ),
+                    html.Label("Display rate"),
+                    html.Select(
+                        id="live-rate",
+                        children=[
+                            html.Option(f"{rate} Hz", value=rate, selected=rate == 10)
+                            for rate in (2, 5, 10, 20)
+                        ],
+                    ),
+                    html.H3("Command intent"),
+                    html.Select(
+                        id="live-mode",
+                        children=[
+                            html.Option(mode.title(), value=mode, selected=mode == "autopilot")
+                            for mode in (
+                                "autopilot",
+                                "velocity",
+                                "hold",
+                                "retreat",
+                                "capture",
+                                "abort",
+                            )
+                        ],
+                    ),
+                    html.Label("Desired velocity (m/s)"),
+                    html.Div(
+                        [
+                            dcc.Input(id=f"live-v{axis}", type="number", value=0.0, step=0.01)
+                            for axis in "xyz"
+                        ],
+                        className="vector-row",
+                    ),
+                    html.Label("Desired torque (N·m)"),
+                    html.Div(
+                        [
+                            dcc.Input(id=f"live-t{axis}", type="number", value=0.0, step=0.1)
+                            for axis in "xyz"
+                        ],
+                        className="vector-row",
+                    ),
+                    html.Div(id="live-lease", className="lease-status"),
+                ],
+                className="live-controls",
+            ),
+            html.Div(
+                [
+                    html.Div(id="live-kpis", className="kpi-strip"),
+                    dcc.Graph(id="live-twin", figure=empty_live),
+                    dcc.Graph(id="live-history", figure=empty_live_history),
+                    html.Div(
+                        [
+                            html.Div([html.H3("Safety decision"), html.Pre(id="live-decision")]),
+                            html.Div([html.H3("Event stream"), html.Pre(id="live-events")]),
+                        ],
+                        className="live-readouts",
+                    ),
+                ],
+                className="live-stage",
+            ),
+        ],
+        className="live-grid",
+    )
+    replay_layout = html.Div(
+        [
+            html.H2("Historical Replay"),
+            dcc.Dropdown(
+                id="run-selector",
+                options=[
+                    {"label": f"{run.scenario_id} · {run.run_id[-12:]}", "value": run.run_id}
+                    for run in runs
+                ],
+                value=runs[0].run_id if runs else None,
+                placeholder="Select a run",
+            ),
+            html.Div(
+                [
+                    html.Button("Play", id="play-button", n_clicks=0),
+                    dcc.Dropdown(
+                        id="playback-speed",
+                        options=[
+                            {"label": f"{speed}×", "value": speed} for speed in (1, 5, 10, 50)
+                        ],
+                        value=10,
+                        clearable=False,
+                        style={"width": "100px"},
+                    ),
+                    dcc.Dropdown(
+                        id="event-jump", placeholder="Jump to event", style={"minWidth": "360px"}
+                    ),
+                ],
+                style={
+                    "display": "flex",
+                    "gap": "12px",
+                    "alignItems": "center",
+                    "marginTop": "12px",
+                    "flexWrap": "wrap",
+                },
+            ),
             dcc.Slider(id="time-slider", min=0.0, max=1.0, step=0.1, value=0.0),
             dcc.Interval(id="playback-timer", interval=100, disabled=True),
             html.Div(id="run-summary", className="kpi-strip"),
@@ -275,8 +519,31 @@ def create_app(store: ReplayStore) -> Any:
             dcc.Graph(id="health-graph"),
             html.H2("Mission events"),
             html.Pre(id="event-list"),
+        ]
+    )
+    app.layout = html.Main(
+        [
+            dcc.Store(id="replay-data"),
+            dcc.Store(id="client-clock"),
+            html.Header(
+                [html.H1("A3 DockLab"), html.Span("Interactive rendezvous & docking laboratory")]
+            ),
+            dcc.Tabs(
+                id="workspace-tabs",
+                value="live",
+                children=[
+                    dcc.Tab(label="Live Lab", value="live", children=live_layout),
+                    dcc.Tab(label="Replay", value="replay", children=replay_layout),
+                ],
+            ),
         ],
-        style={"maxWidth": "1400px", "width": "100%", "margin": "0 auto", "padding": "16px", "fontFamily": "system-ui"},
+        style={
+            "maxWidth": "1400px",
+            "width": "100%",
+            "margin": "0 auto",
+            "padding": "16px",
+            "fontFamily": "system-ui",
+        },
     )
 
     @app.callback(
@@ -298,7 +565,16 @@ def create_app(store: ReplayStore) -> Any:
         payload, options = load_replay_payload(store, manifest)
         maximum = int(payload["truth"]["event_time_ns"][-1]) / 1_000_000_000
         event_text = "\n".join(option["label"] for option in options)
-        return payload, maximum, 0.0, options, _trajectory_figure(go, payload), _timeline_figure(go, payload), _health_figure(go, payload), event_text
+        return (
+            payload,
+            maximum,
+            0.0,
+            options,
+            _trajectory_figure(go, payload),
+            _timeline_figure(go, payload),
+            _health_figure(go, payload),
+            event_text,
+        )
 
     app.clientside_callback(
         """function(clicks) { const playing = (clicks || 0) % 2 === 1; return [!playing, playing ? 'Pause' : 'Play']; }""",
