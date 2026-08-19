@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -46,6 +47,7 @@ from a3docklab.simulation.commands import (
     SimulationObservation,
 )
 from a3docklab.simulation.phases import MissionPhase, PhaseMachine
+from a3docklab.simulation.policies import PolicyAdapter, PolicyDriver, PolicyMetadata
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,8 @@ class SimulationFrame:
     state: dict[str, object]
     events: tuple[dict[str, object], ...] = ()
     decision: CommandDecision | None = None
+    shadow_decision: CommandDecision | None = None
+    shadow_policy: PolicyMetadata | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +152,8 @@ def _attitude_rk4_step(
 def _controlled_frames(
     config: SimulationConfig,
     command_resolver: Callable[[SimulationObservation, np.ndarray], CommandDecision] | None = None,
+    shadow_resolver: Callable[[SimulationObservation, np.ndarray], CommandDecision] | None = None,
+    shadow_policy: PolicyMetadata | None = None,
 ) -> Iterator[SimulationFrame]:
     """Yield a phase-controlled mission one observable integration frame at a time."""
     if config.fidelity != "cw":
@@ -458,6 +464,9 @@ def _controlled_frames(
             capture_eligible=safety.capture_eligible,
         )
         decision = command_resolver(observation, desired_velocity) if command_resolver else None
+        shadow_decision = (
+            shadow_resolver(observation, desired_velocity.copy()) if shadow_resolver else None
+        )
         if decision is not None:
             desired_velocity = np.asarray(decision.executed_velocity_m_s, dtype=np.float64)
             if (
@@ -588,224 +597,212 @@ def _controlled_frames(
             MissionPhase.COMPLETE,
         }
         row = {
-                "run_id": run_id,
-                "time_s": float(time_s),
-                "scenario": config.name,
-                "random_seed": config.random_seed,
-                "fidelity": config.fidelity,
-                "mean_motion_rad_s": n_rad_s,
-                "phase": machine.phase.value,
-                "x_m": state[0],
-                "y_m": state[1],
-                "z_m": state[2],
-                "vx_m_s": state[3],
-                "vy_m_s": state[4],
-                "vz_m_s": state[5],
-                "reference_vx_m_s": desired_velocity[0],
-                "reference_vy_m_s": desired_velocity[1],
-                "reference_vz_m_s": desired_velocity[2],
-                "velocity_error_m_s": float(np.linalg.norm(velocity_error)),
-                "commanded_fx_n": requested_force_lvlh_n[0],
-                "commanded_fy_n": requested_force_lvlh_n[1],
-                "commanded_fz_n": requested_force_lvlh_n[2],
-                "actual_fx_n": force_n[0],
-                "actual_fy_n": force_n[1],
-                "actual_fz_n": force_n[2],
-                "thrust_n": float(np.linalg.norm(force_n)),
-                "fuel_mass_kg": fuel_mass_kg,
-                "target_fuel_mass_kg": target_fuel_mass_kg,
-                "chaser_propellant_used_kg": initial_fuel_mass_kg - fuel_mass_kg,
-                "target_propellant_used_kg": (initial_target_fuel_mass_kg - target_fuel_mass_kg),
-                "propellant_used_kg": (
-                    initial_fuel_mass_kg
-                    - fuel_mass_kg
-                    + initial_target_fuel_mass_kg
-                    - target_fuel_mass_kg
-                ),
-                "range_m": range_m,
-                "closing_rate_m_s": safety.closing_rate_m_s,
-                "closing_rate_limit_m_s": safety.closing_rate_limit_m_s,
-                "time_to_contact_s": safety.time_to_contact_s,
-                "corridor_margin_m": safety.corridor_margin_m,
-                "keep_out_margin_m": safety.keep_out_margin_m,
-                "warning": safety.abort.reason if safety.abort else "",
-                "abort_mode": abort_mode,
-                "chaser_qw": chaser_attitude[0],
-                "chaser_qx": chaser_attitude[1],
-                "chaser_qy": chaser_attitude[2],
-                "chaser_qz": chaser_attitude[3],
-                "chaser_wx_rad_s": chaser_attitude[4],
-                "chaser_wy_rad_s": chaser_attitude[5],
-                "chaser_wz_rad_s": chaser_attitude[6],
-                "target_qw": target_attitude[0],
-                "target_qx": target_attitude[1],
-                "target_qy": target_attitude[2],
-                "target_qz": target_attitude[3],
-                "target_wx_rad_s": target_attitude[4],
-                "target_wy_rad_s": target_attitude[5],
-                "target_wz_rad_s": target_attitude[6],
-                "commanded_tx_n_m": attitude_torque_n_m[0],
-                "commanded_ty_n_m": attitude_torque_n_m[1],
-                "commanded_tz_n_m": attitude_torque_n_m[2],
-                "actual_tx_n_m": allocation.achieved_torque_body_n_m[0],
-                "actual_ty_n_m": allocation.achieved_torque_body_n_m[1],
-                "actual_tz_n_m": allocation.achieved_torque_body_n_m[2],
-                "stack_actual_tx_n_m": stack_actual_torque_n_m[0],
-                "stack_actual_ty_n_m": stack_actual_torque_n_m[1],
-                "stack_actual_tz_n_m": stack_actual_torque_n_m[2],
-                "allocation_force_residual_n": float(np.linalg.norm(allocation.force_residual_n)),
-                "allocation_torque_residual_n_m": float(
-                    np.linalg.norm(allocation.torque_residual_n_m)
-                ),
-                "allocation_saturated": allocation.saturated,
-                "minimum_impulse_active": allocation.minimum_impulse_active,
-                "active_thruster_count": allocation.active_thruster_count,
-                "thruster_duty_cycles": allocation.duty_cycles.tolist(),
-                "docked_stack_active": docked_stack_active,
-                "stack_total_mass_kg": stack.total_mass_kg if docked_stack_active else np.nan,
-                "stack_com_x_m": (
-                    stack.center_of_mass_reference_m[0] if docked_stack_active else np.nan
-                ),
-                "stack_com_y_m": (
-                    stack.center_of_mass_reference_m[1] if docked_stack_active else np.nan
-                ),
-                "stack_com_z_m": (
-                    stack.center_of_mass_reference_m[2] if docked_stack_active else np.nan
-                ),
-                "stack_inertia_xx_kg_m2": (
-                    stack.inertia_about_com_reference_kg_m2[0, 0] if docked_stack_active else np.nan
-                ),
-                "stack_inertia_yy_kg_m2": (
-                    stack.inertia_about_com_reference_kg_m2[1, 1] if docked_stack_active else np.nan
-                ),
-                "stack_inertia_zz_kg_m2": (
-                    stack.inertia_about_com_reference_kg_m2[2, 2] if docked_stack_active else np.nan
-                ),
-                "stack_inertia_xy_kg_m2": (
-                    stack.inertia_about_com_reference_kg_m2[0, 1] if docked_stack_active else np.nan
-                ),
-                "stack_inertia_xz_kg_m2": (
-                    stack.inertia_about_com_reference_kg_m2[0, 2] if docked_stack_active else np.nan
-                ),
-                "stack_inertia_yz_kg_m2": (
-                    stack.inertia_about_com_reference_kg_m2[1, 2] if docked_stack_active else np.nan
-                ),
-                "capture_latched": capture_result is not None,
-                "capture_dissipated_energy_j": (
-                    capture_result.dissipated_energy_j if capture_result is not None else np.nan
-                ),
-                "capture_linear_momentum_residual_kg_m_s": (
-                    capture_result.linear_momentum_residual_kg_m_s
-                    if capture_result is not None
-                    else np.nan
-                ),
-                "capture_angular_momentum_residual_kg_m2_s": (
-                    capture_result.angular_momentum_residual_kg_m2_s
-                    if capture_result is not None
-                    else np.nan
-                ),
-                "stack_vx_m_s": (stack_velocity[0] if capture_result is not None else np.nan),
-                "stack_vy_m_s": (stack_velocity[1] if capture_result is not None else np.nan),
-                "stack_vz_m_s": (stack_velocity[2] if capture_result is not None else np.nan),
-                "stack_wx_rad_s": (stack_angular_rate[0] if capture_result is not None else np.nan),
-                "stack_wy_rad_s": (stack_angular_rate[1] if capture_result is not None else np.nan),
-                "stack_wz_rad_s": (stack_angular_rate[2] if capture_result is not None else np.nan),
-                "handoff_state": handoff.state.value,
-                "controller_authority": handoff.owner.value,
-                "command_source": handoff.owner.value,
-                "handoff_target": handoff.desired_owner.value,
-                "handoff_reason": handoff_reason,
-                "handoff_ready": True,
-                "handoff_shadow_command_delta": shadow_candidate_delta,
-                "handoff_activation_command_delta": activation_command_delta,
-                "orion_shadow_fx_n": orion_shadow.force_reference_n[0],
-                "orion_shadow_fy_n": orion_shadow.force_reference_n[1],
-                "orion_shadow_fz_n": orion_shadow.force_reference_n[2],
-                "orion_shadow_tx_n_m": orion_shadow.torque_reference_n_m[0],
-                "orion_shadow_ty_n_m": orion_shadow.torque_reference_n_m[1],
-                "orion_shadow_tz_n_m": orion_shadow.torque_reference_n_m[2],
-                "target_shadow_fx_n": target_shadow.force_reference_n[0],
-                "target_shadow_fy_n": target_shadow.force_reference_n[1],
-                "target_shadow_fz_n": target_shadow.force_reference_n[2],
-                "target_shadow_tx_n_m": target_shadow.torque_reference_n_m[0],
-                "target_shadow_ty_n_m": target_shadow.torque_reference_n_m[1],
-                "target_shadow_tz_n_m": target_shadow.torque_reference_n_m[2],
-                "observed_orion_authority": observed_orion_authority,
-                "observed_target_authority": observed_target_authority,
-                "authority_invariant_valid": authority_invariant_valid,
-                "stack_controller_vehicle": (
-                    handoff.owner.value if stack_control_active else "none"
-                ),
-                "stack_control_active": stack_control_active,
-                "active_owner_failure_injected": active_owner_failure_injected,
-                "handoff_packet_schema_version": "2.0" if exchange_validation else "",
-                "handoff_packet_sequence": exchange_sequence - 1 if exchange_validation else -1,
-                "handoff_packet_age_s": (
-                    exchange_validation.data_age_s if exchange_validation else np.nan
-                ),
-                "handoff_frame_id": exchange_frame_id if exchange_validation else "",
-                "handoff_frame_consistent": (
-                    exchange_validation.frame_consistent if exchange_validation else False
-                ),
-                "handoff_covariance_valid": (
-                    exchange_validation.covariance_valid if exchange_validation else False
-                ),
-                "handoff_clock_synchronized": (
-                    exchange_validation.clock_synchronized if exchange_validation else False
-                ),
-                "handoff_phase_consistent": (
-                    exchange_validation.phase_consistent if exchange_validation else False
-                ),
-                "handoff_actuator_healthy": (
-                    exchange_validation.actuator_healthy if exchange_validation else False
-                ),
-                "handoff_exchange_reason": (
-                    exchange_validation.reason if exchange_validation else "not_received"
-                ),
-                "port_separation_m": safety.docking_alignment.separation_m,
-                "port_lateral_offset_m": safety.docking_alignment.lateral_offset_m,
-                "port_angular_error_deg": safety.docking_alignment.angular_error_deg,
-                "port_clocking_error_deg": safety.docking_alignment.clocking_error_deg,
-                "capture_eligible": safety.capture_eligible,
-                "command_id": decision.command_id if decision else "",
-                "command_driver_id": decision.driver_id if decision else "reference-autopilot",
-                "command_driver_kind": (
-                    decision.driver_kind.value if decision else "autopilot"
-                ),
-                "command_requested_mode": (
-                    decision.requested_mode.value if decision else "autopilot"
-                ),
-                "command_decision_status": (
-                    decision.status.value if decision else "accepted"
-                ),
-                "command_decision_reason": (
-                    decision.reason if decision else "reference_autopilot"
-                ),
-                "command_requested_vx_m_s": (
-                    decision.requested_velocity_m_s[0] if decision else desired_velocity[0]
-                ),
-                "command_requested_vy_m_s": (
-                    decision.requested_velocity_m_s[1] if decision else desired_velocity[1]
-                ),
-                "command_requested_vz_m_s": (
-                    decision.requested_velocity_m_s[2] if decision else desired_velocity[2]
-                ),
-                "command_executed_vx_m_s": desired_velocity[0],
-                "command_executed_vy_m_s": desired_velocity[1],
-                "command_executed_vz_m_s": desired_velocity[2],
-                "command_requested_tx_n_m": (
-                    decision.requested_torque_n_m[0] if decision else attitude_torque_n_m[0]
-                ),
-                "command_requested_ty_n_m": (
-                    decision.requested_torque_n_m[1] if decision else attitude_torque_n_m[1]
-                ),
-                "command_requested_tz_n_m": (
-                    decision.requested_torque_n_m[2] if decision else attitude_torque_n_m[2]
-                ),
-                "command_executed_tx_n_m": attitude_torque_n_m[0],
-                "command_executed_ty_n_m": attitude_torque_n_m[1],
-                "command_executed_tz_n_m": attitude_torque_n_m[2],
-            }
+            "run_id": run_id,
+            "time_s": float(time_s),
+            "scenario": config.name,
+            "random_seed": config.random_seed,
+            "fidelity": config.fidelity,
+            "mean_motion_rad_s": n_rad_s,
+            "phase": machine.phase.value,
+            "x_m": state[0],
+            "y_m": state[1],
+            "z_m": state[2],
+            "vx_m_s": state[3],
+            "vy_m_s": state[4],
+            "vz_m_s": state[5],
+            "reference_vx_m_s": desired_velocity[0],
+            "reference_vy_m_s": desired_velocity[1],
+            "reference_vz_m_s": desired_velocity[2],
+            "velocity_error_m_s": float(np.linalg.norm(velocity_error)),
+            "commanded_fx_n": requested_force_lvlh_n[0],
+            "commanded_fy_n": requested_force_lvlh_n[1],
+            "commanded_fz_n": requested_force_lvlh_n[2],
+            "actual_fx_n": force_n[0],
+            "actual_fy_n": force_n[1],
+            "actual_fz_n": force_n[2],
+            "thrust_n": float(np.linalg.norm(force_n)),
+            "fuel_mass_kg": fuel_mass_kg,
+            "target_fuel_mass_kg": target_fuel_mass_kg,
+            "chaser_propellant_used_kg": initial_fuel_mass_kg - fuel_mass_kg,
+            "target_propellant_used_kg": (initial_target_fuel_mass_kg - target_fuel_mass_kg),
+            "propellant_used_kg": (
+                initial_fuel_mass_kg
+                - fuel_mass_kg
+                + initial_target_fuel_mass_kg
+                - target_fuel_mass_kg
+            ),
+            "range_m": range_m,
+            "closing_rate_m_s": safety.closing_rate_m_s,
+            "closing_rate_limit_m_s": safety.closing_rate_limit_m_s,
+            "time_to_contact_s": safety.time_to_contact_s,
+            "corridor_margin_m": safety.corridor_margin_m,
+            "keep_out_margin_m": safety.keep_out_margin_m,
+            "warning": safety.abort.reason if safety.abort else "",
+            "abort_mode": abort_mode,
+            "chaser_qw": chaser_attitude[0],
+            "chaser_qx": chaser_attitude[1],
+            "chaser_qy": chaser_attitude[2],
+            "chaser_qz": chaser_attitude[3],
+            "chaser_wx_rad_s": chaser_attitude[4],
+            "chaser_wy_rad_s": chaser_attitude[5],
+            "chaser_wz_rad_s": chaser_attitude[6],
+            "target_qw": target_attitude[0],
+            "target_qx": target_attitude[1],
+            "target_qy": target_attitude[2],
+            "target_qz": target_attitude[3],
+            "target_wx_rad_s": target_attitude[4],
+            "target_wy_rad_s": target_attitude[5],
+            "target_wz_rad_s": target_attitude[6],
+            "commanded_tx_n_m": attitude_torque_n_m[0],
+            "commanded_ty_n_m": attitude_torque_n_m[1],
+            "commanded_tz_n_m": attitude_torque_n_m[2],
+            "actual_tx_n_m": allocation.achieved_torque_body_n_m[0],
+            "actual_ty_n_m": allocation.achieved_torque_body_n_m[1],
+            "actual_tz_n_m": allocation.achieved_torque_body_n_m[2],
+            "stack_actual_tx_n_m": stack_actual_torque_n_m[0],
+            "stack_actual_ty_n_m": stack_actual_torque_n_m[1],
+            "stack_actual_tz_n_m": stack_actual_torque_n_m[2],
+            "allocation_force_residual_n": float(np.linalg.norm(allocation.force_residual_n)),
+            "allocation_torque_residual_n_m": float(np.linalg.norm(allocation.torque_residual_n_m)),
+            "allocation_saturated": allocation.saturated,
+            "minimum_impulse_active": allocation.minimum_impulse_active,
+            "active_thruster_count": allocation.active_thruster_count,
+            "thruster_duty_cycles": allocation.duty_cycles.tolist(),
+            "docked_stack_active": docked_stack_active,
+            "stack_total_mass_kg": stack.total_mass_kg if docked_stack_active else np.nan,
+            "stack_com_x_m": (
+                stack.center_of_mass_reference_m[0] if docked_stack_active else np.nan
+            ),
+            "stack_com_y_m": (
+                stack.center_of_mass_reference_m[1] if docked_stack_active else np.nan
+            ),
+            "stack_com_z_m": (
+                stack.center_of_mass_reference_m[2] if docked_stack_active else np.nan
+            ),
+            "stack_inertia_xx_kg_m2": (
+                stack.inertia_about_com_reference_kg_m2[0, 0] if docked_stack_active else np.nan
+            ),
+            "stack_inertia_yy_kg_m2": (
+                stack.inertia_about_com_reference_kg_m2[1, 1] if docked_stack_active else np.nan
+            ),
+            "stack_inertia_zz_kg_m2": (
+                stack.inertia_about_com_reference_kg_m2[2, 2] if docked_stack_active else np.nan
+            ),
+            "stack_inertia_xy_kg_m2": (
+                stack.inertia_about_com_reference_kg_m2[0, 1] if docked_stack_active else np.nan
+            ),
+            "stack_inertia_xz_kg_m2": (
+                stack.inertia_about_com_reference_kg_m2[0, 2] if docked_stack_active else np.nan
+            ),
+            "stack_inertia_yz_kg_m2": (
+                stack.inertia_about_com_reference_kg_m2[1, 2] if docked_stack_active else np.nan
+            ),
+            "capture_latched": capture_result is not None,
+            "capture_dissipated_energy_j": (
+                capture_result.dissipated_energy_j if capture_result is not None else np.nan
+            ),
+            "capture_linear_momentum_residual_kg_m_s": (
+                capture_result.linear_momentum_residual_kg_m_s
+                if capture_result is not None
+                else np.nan
+            ),
+            "capture_angular_momentum_residual_kg_m2_s": (
+                capture_result.angular_momentum_residual_kg_m2_s
+                if capture_result is not None
+                else np.nan
+            ),
+            "stack_vx_m_s": (stack_velocity[0] if capture_result is not None else np.nan),
+            "stack_vy_m_s": (stack_velocity[1] if capture_result is not None else np.nan),
+            "stack_vz_m_s": (stack_velocity[2] if capture_result is not None else np.nan),
+            "stack_wx_rad_s": (stack_angular_rate[0] if capture_result is not None else np.nan),
+            "stack_wy_rad_s": (stack_angular_rate[1] if capture_result is not None else np.nan),
+            "stack_wz_rad_s": (stack_angular_rate[2] if capture_result is not None else np.nan),
+            "handoff_state": handoff.state.value,
+            "controller_authority": handoff.owner.value,
+            "command_source": handoff.owner.value,
+            "handoff_target": handoff.desired_owner.value,
+            "handoff_reason": handoff_reason,
+            "handoff_ready": True,
+            "handoff_shadow_command_delta": shadow_candidate_delta,
+            "handoff_activation_command_delta": activation_command_delta,
+            "orion_shadow_fx_n": orion_shadow.force_reference_n[0],
+            "orion_shadow_fy_n": orion_shadow.force_reference_n[1],
+            "orion_shadow_fz_n": orion_shadow.force_reference_n[2],
+            "orion_shadow_tx_n_m": orion_shadow.torque_reference_n_m[0],
+            "orion_shadow_ty_n_m": orion_shadow.torque_reference_n_m[1],
+            "orion_shadow_tz_n_m": orion_shadow.torque_reference_n_m[2],
+            "target_shadow_fx_n": target_shadow.force_reference_n[0],
+            "target_shadow_fy_n": target_shadow.force_reference_n[1],
+            "target_shadow_fz_n": target_shadow.force_reference_n[2],
+            "target_shadow_tx_n_m": target_shadow.torque_reference_n_m[0],
+            "target_shadow_ty_n_m": target_shadow.torque_reference_n_m[1],
+            "target_shadow_tz_n_m": target_shadow.torque_reference_n_m[2],
+            "observed_orion_authority": observed_orion_authority,
+            "observed_target_authority": observed_target_authority,
+            "authority_invariant_valid": authority_invariant_valid,
+            "stack_controller_vehicle": (handoff.owner.value if stack_control_active else "none"),
+            "stack_control_active": stack_control_active,
+            "active_owner_failure_injected": active_owner_failure_injected,
+            "handoff_packet_schema_version": "2.0" if exchange_validation else "",
+            "handoff_packet_sequence": exchange_sequence - 1 if exchange_validation else -1,
+            "handoff_packet_age_s": (
+                exchange_validation.data_age_s if exchange_validation else np.nan
+            ),
+            "handoff_frame_id": exchange_frame_id if exchange_validation else "",
+            "handoff_frame_consistent": (
+                exchange_validation.frame_consistent if exchange_validation else False
+            ),
+            "handoff_covariance_valid": (
+                exchange_validation.covariance_valid if exchange_validation else False
+            ),
+            "handoff_clock_synchronized": (
+                exchange_validation.clock_synchronized if exchange_validation else False
+            ),
+            "handoff_phase_consistent": (
+                exchange_validation.phase_consistent if exchange_validation else False
+            ),
+            "handoff_actuator_healthy": (
+                exchange_validation.actuator_healthy if exchange_validation else False
+            ),
+            "handoff_exchange_reason": (
+                exchange_validation.reason if exchange_validation else "not_received"
+            ),
+            "port_separation_m": safety.docking_alignment.separation_m,
+            "port_lateral_offset_m": safety.docking_alignment.lateral_offset_m,
+            "port_angular_error_deg": safety.docking_alignment.angular_error_deg,
+            "port_clocking_error_deg": safety.docking_alignment.clocking_error_deg,
+            "capture_eligible": safety.capture_eligible,
+            "command_id": decision.command_id if decision else "",
+            "command_driver_id": decision.driver_id if decision else "reference-autopilot",
+            "command_driver_kind": (decision.driver_kind.value if decision else "autopilot"),
+            "command_requested_mode": (decision.requested_mode.value if decision else "autopilot"),
+            "command_decision_status": (decision.status.value if decision else "accepted"),
+            "command_decision_reason": (decision.reason if decision else "reference_autopilot"),
+            "command_requested_vx_m_s": (
+                decision.requested_velocity_m_s[0] if decision else desired_velocity[0]
+            ),
+            "command_requested_vy_m_s": (
+                decision.requested_velocity_m_s[1] if decision else desired_velocity[1]
+            ),
+            "command_requested_vz_m_s": (
+                decision.requested_velocity_m_s[2] if decision else desired_velocity[2]
+            ),
+            "command_executed_vx_m_s": desired_velocity[0],
+            "command_executed_vy_m_s": desired_velocity[1],
+            "command_executed_vz_m_s": desired_velocity[2],
+            "command_requested_tx_n_m": (
+                decision.requested_torque_n_m[0] if decision else attitude_torque_n_m[0]
+            ),
+            "command_requested_ty_n_m": (
+                decision.requested_torque_n_m[1] if decision else attitude_torque_n_m[1]
+            ),
+            "command_requested_tz_n_m": (
+                decision.requested_torque_n_m[2] if decision else attitude_torque_n_m[2]
+            ),
+            "command_executed_tx_n_m": attitude_torque_n_m[0],
+            "command_executed_ty_n_m": attitude_torque_n_m[1],
+            "command_executed_tz_n_m": attitude_torque_n_m[2],
+        }
         abort_response_complete = (
             machine.phase == MissionPhase.ABORT
             and float(time_s) > machine.entered_at_s
@@ -828,6 +825,8 @@ def _controlled_frames(
             state=row,
             events=tuple(deepcopy(event) for event in events[event_start:]),
             decision=decision,
+            shadow_decision=shadow_decision,
+            shadow_policy=shadow_policy,
         )
         if machine.phase == MissionPhase.COMPLETE or abort_response_complete:
             break
@@ -852,24 +851,35 @@ def _controlled_frames(
             stack_angular_rate = stack_angular_rate + angular_acceleration * config.step_s
 
 
-
 class SimulationSession:
     """Persistent, step-driven facade over the deterministic controlled mission."""
 
     def __init__(
-        self, config: SimulationConfig, *, authorized_driver_id: str | None = None
+        self,
+        config: SimulationConfig,
+        *,
+        authorized_driver_id: str | None = None,
+        active_policy: PolicyAdapter | None = None,
+        shadow_policy: PolicyAdapter | None = None,
     ) -> None:
         if config.fidelity != "cw":
             raise ValueError("controlled simulation currently requires fidelity='cw'")
         self.config = config
         self.run_id = deterministic_run_id(config)
         self.arbiter = CommandArbiter(config, authorized_driver_id)
+        self.active_policy = PolicyDriver(config, active_policy) if active_policy else None
+        self.shadow_policy = PolicyDriver(config, shadow_policy) if shadow_policy else None
         self._pending_intent: ControlIntent | None = None
         self.reset()
 
     def reset(self) -> None:
         """Reset the session to its reproducible pre-step state."""
-        self._frames = _controlled_frames(self.config, self._resolve_command)
+        self._frames = _controlled_frames(
+            self.config,
+            self._resolve_command,
+            self.shadow_policy,
+            self.shadow_policy.metadata if self.shadow_policy else None,
+        )
         self._rows: list[dict[str, object]] = []
         self._events: list[dict[str, object]] = []
         self._intents: list[ControlIntent | None] = []
@@ -897,6 +907,8 @@ class SimulationSession:
     def _resolve_command(
         self, observation: SimulationObservation, autopilot_velocity: np.ndarray
     ) -> CommandDecision:
+        if self._pending_intent is None and self.active_policy is not None:
+            return self.active_policy(observation, autopilot_velocity)
         return self.arbiter.decide(observation, autopilot_velocity, self._pending_intent)
 
     def pause(self) -> None:
@@ -925,7 +937,11 @@ class SimulationSession:
         if self._complete:
             self._paused = True
         return SimulationFrame(
-            deepcopy(frame.state), tuple(deepcopy(frame.events)), frame.decision
+            deepcopy(frame.state),
+            tuple(deepcopy(frame.events)),
+            frame.decision,
+            frame.shadow_decision,
+            frame.shadow_policy,
         )
 
     def advance(self, steps: int = 1) -> list[SimulationFrame]:
@@ -957,7 +973,7 @@ class SimulationSession:
         return SimulationCheckpoint(
             run_id=self.run_id,
             step_index=self.step_index,
-            time_s=float(state["time_s"]),
+            time_s=cast(float, state["time_s"]),
             state=state,
             intents=tuple(self._intents),
         )

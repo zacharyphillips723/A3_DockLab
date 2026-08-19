@@ -59,6 +59,8 @@
     setText("live-kpis", `${payload.scenario_id} · ${payload.lifecycle.toUpperCase()} · ${state.time_s.toFixed(1)} s · ${state.range_m.toFixed(2)} m range · ${state.closing_rate_m_s.toFixed(3)} m/s closing · ${state.phase} · TTC ${Number.isFinite(ttc) ? ttc.toFixed(1) + " s" : "—"} · propellant ${state.propellant_used_kg.toFixed(2)} kg`);
     const decision = payload.frame.decision;
     setText("live-decision", decision ? `${decision.status.toUpperCase()}: ${decision.requested_mode}\n${decision.reason}\nrequested ${JSON.stringify(decision.requested_velocity_m_s)}\nexecuted  ${JSON.stringify(decision.executed_velocity_m_s)}` : "Reference autopilot");
+    const shadow = payload.frame.shadow_decision;
+    setText("live-shadow", shadow ? `${payload.frame.shadow_policy.policy_id} ${payload.frame.shadow_policy.policy_version}\n${shadow.status.toUpperCase()}: ${shadow.requested_mode}\n${shadow.reason}\nproposed ${JSON.stringify(shadow.requested_velocity_m_s)}\napproved ${JSON.stringify(shadow.executed_velocity_m_s)}\nSHADOW ONLY — no control authority` : "Disabled");
     if (payload.frame.events && payload.frame.events.length) live.events.push(...payload.frame.events);
     setText("live-events", live.events.slice(-12).map((event) => `${event.time_s.toFixed(1)}s · ${event.event_type} · ${event.detail}`).join("\n") || "No events yet");
     if (["complete", "terminated"].includes(payload.lifecycle)) stop();
@@ -107,7 +109,8 @@
       try {
         const scenario = dropdownRawValue("live-scenario");
         const fault = dropdownRawValue("live-fault") || "none";
-        const payload = await api("/api/simulations", {method: "POST", body: JSON.stringify({scenario_id: scenario, fault})});
+        const shadow_policy_id = dropdownRawValue("live-shadow-policy") || null;
+        const payload = await api("/api/simulations", {method: "POST", body: JSON.stringify({scenario_id: scenario, fault, shadow_policy_id})});
         live.sessionId = payload.session_id; live.token = payload.control_token;
         setText("live-lease", `Control lease: ${payload.owner} · ${payload.session_id.slice(0, 8)}`);
         await control("step", true);

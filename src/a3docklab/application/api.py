@@ -78,7 +78,10 @@ def register_simulation_routes(server: Any, service: InteractiveSimulationServic
         owner = request.headers.get("X-Forwarded-Email", "local-operator")
         return handle(
             lambda: service.create(
-                str(payload.get("scenario_id", "")), owner, str(payload.get("fault", "none"))
+                str(payload.get("scenario_id", "")),
+                owner,
+                str(payload.get("fault", "none")),
+                str(payload["shadow_policy_id"]) if payload.get("shadow_policy_id") else None,
             ),
             201,
         )

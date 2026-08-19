@@ -13,6 +13,7 @@ from uuid import uuid4
 from a3docklab.config import SimulationConfig
 from a3docklab.simulation.commands import ControlIntent, DriverKind, IntentMode
 from a3docklab.simulation.engine import SimulationFrame, SimulationSession
+from a3docklab.simulation.policies import ReferenceAutopilotPolicy
 
 
 class SessionError(RuntimeError):
@@ -62,7 +63,13 @@ class InteractiveSimulationService:
     def list_scenarios(self) -> list[dict[str, str]]:
         return [{"id": key, "name": config.name} for key, config in self.scenarios.items()]
 
-    def create(self, scenario_id: str, owner: str, fault: str = "none") -> dict[str, Any]:
+    def create(
+        self,
+        scenario_id: str,
+        owner: str,
+        fault: str = "none",
+        shadow_policy_id: str | None = None,
+    ) -> dict[str, Any]:
         if scenario_id not in self.scenarios:
             raise SessionNotFound(f"unknown scenario: {scenario_id}")
         if fault not in self.FAULTS:
@@ -72,7 +79,12 @@ class InteractiveSimulationService:
         driver_id = f"human:{owner}:{session_id}"
         config = deepcopy(self.scenarios[scenario_id])
         config.handoff.injected_fault = fault  # type: ignore[assignment]
-        session = SimulationSession(config, authorized_driver_id=driver_id)
+        if shadow_policy_id not in {None, "reference-autopilot"}:
+            raise ValueError(f"unknown shadow policy: {shadow_policy_id}")
+        shadow_policy = ReferenceAutopilotPolicy() if shadow_policy_id else None
+        session = SimulationSession(
+            config, authorized_driver_id=driver_id, shadow_policy=shadow_policy
+        )
         with self._lock:
             self._sessions[session_id] = {
                 "session": session,
@@ -85,6 +97,7 @@ class InteractiveSimulationService:
                 "requested_intent": None,
                 "last_frame": None,
                 "fault": fault,
+                "shadow_policy_id": shadow_policy_id,
             }
         status = self.status(session_id)
         status["control_token"] = token
@@ -123,6 +136,12 @@ class InteractiveSimulationService:
             "state": InteractiveSimulationService._json_safe(frame.state),
             "events": InteractiveSimulationService._json_safe(frame.events),
             "decision": frame.decision.model_dump(mode="json") if frame.decision else None,
+            "shadow_decision": (
+                frame.shadow_decision.model_dump(mode="json") if frame.shadow_decision else None
+            ),
+            "shadow_policy": (
+                frame.shadow_policy.model_dump(mode="json") if frame.shadow_policy else None
+            ),
         }
 
     def status(self, session_id: str) -> dict[str, Any]:
@@ -153,6 +172,7 @@ class InteractiveSimulationService:
                 "scenario_id": entry["scenario_id"],
                 "owner": entry["owner"],
                 "fault": entry["fault"],
+                "shadow_policy_id": entry["shadow_policy_id"],
                 "lifecycle": lifecycle,
                 "step_index": session.step_index,
                 "frame": self._frame_payload(entry["last_frame"] or session.current),
@@ -172,6 +192,7 @@ class InteractiveSimulationService:
                 "run_id": session.run_id,
                 "scenario_id": entry["scenario_id"],
                 "fault": entry["fault"],
+                "shadow_policy_id": entry["shadow_policy_id"],
                 "commands": [
                     intent.model_dump(mode="json") if intent is not None else None
                     for intent in intents
