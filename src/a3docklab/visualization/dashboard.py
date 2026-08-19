@@ -402,6 +402,14 @@ def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None =
                             )
                         ],
                     ),
+                    html.Label("Shadow policy"),
+                    html.Select(
+                        id="live-shadow-policy",
+                        children=[
+                            html.Option("Disabled", value="", selected=True),
+                            html.Option("Reference autopilot", value="reference-autopilot"),
+                        ],
+                    ),
                     html.Div(
                         [
                             html.Button("Run", id="live-resume"),
@@ -465,6 +473,7 @@ def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None =
                     html.Div(
                         [
                             html.Div([html.H3("Safety decision"), html.Pre(id="live-decision")]),
+                            html.Div([html.H3("Shadow policy"), html.Pre(id="live-shadow")]),
                             html.Div([html.H3("Event stream"), html.Pre(id="live-events")]),
                         ],
                         className="live-readouts",

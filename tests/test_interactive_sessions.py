@@ -96,3 +96,22 @@ def test_fault_selection_is_validated(service: InteractiveSimulationService) -> 
     assert created["fault"] == "stale_data"
     with pytest.raises(ValueError, match="unsupported fault"):
         service.create("blue_moon_side", "pilot@example.com", "not-a-fault")
+
+
+def test_shadow_policy_is_exposed_without_taking_authority(
+    service: InteractiveSimulationService,
+) -> None:
+    created = service.create(
+        "blue_moon_side", "pilot@example.com", shadow_policy_id="reference-autopilot"
+    )
+    stepped = service.control(
+        created["session_id"],
+        created["control_token"],
+        "step",
+        {"intent": {"mode": "hold"}},
+    )
+
+    assert stepped["frame"]["decision"]["requested_mode"] == "hold"
+    assert stepped["frame"]["shadow_decision"]["requested_mode"] == "autopilot"
+    assert stepped["frame"]["shadow_policy"]["policy_version"] == "1.0.0"
+    assert stepped["frame"]["state"]["command_requested_mode"] == "hold"
