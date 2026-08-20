@@ -72,6 +72,10 @@ def register_simulation_routes(server: Any, service: InteractiveSimulationServic
     def simulation_scenarios() -> tuple[object, int]:
         return jsonify(service.list_scenarios()), 200
 
+    @server.get("/api/simulations/policies")  # type: ignore[untyped-decorator]
+    def simulation_policies() -> tuple[object, int]:
+        return jsonify(service.list_policies()), 200
+
     @server.post("/api/simulations")  # type: ignore[untyped-decorator]
     def create_simulation() -> tuple[object, int]:
         payload = request.get_json(silent=True) or {}
@@ -81,7 +85,13 @@ def register_simulation_routes(server: Any, service: InteractiveSimulationServic
                 str(payload.get("scenario_id", "")),
                 owner,
                 str(payload.get("fault", "none")),
+                str(payload["active_policy_id"]) if payload.get("active_policy_id") else None,
                 str(payload["shadow_policy_id"]) if payload.get("shadow_policy_id") else None,
+                float(payload.get("latency_budget_ms", 50.0)),
+                str(payload.get("fallback_mode", "hold")),
+                str(payload["model_uri"]) if payload.get("model_uri") else None,
+                str(payload.get("model_version", "unknown")),
+                str(payload.get("code_revision", "unknown")),
             ),
             201,
         )
@@ -93,6 +103,10 @@ def register_simulation_routes(server: Any, service: InteractiveSimulationServic
     @server.get("/api/simulations/<session_id>/commands")  # type: ignore[untyped-decorator]
     def simulation_commands(session_id: str) -> tuple[object, int]:
         return handle(lambda: service.command_log(session_id))
+
+    @server.get("/api/simulations/<session_id>/policy-evaluations")  # type: ignore[untyped-decorator]
+    def simulation_policy_evaluations(session_id: str) -> tuple[object, int]:
+        return handle(lambda: service.policy_evaluations(session_id))
 
     @server.post("/api/simulations/<session_id>/control")  # type: ignore[untyped-decorator]
     def simulation_control(session_id: str) -> tuple[object, int]:

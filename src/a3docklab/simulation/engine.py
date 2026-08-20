@@ -47,7 +47,13 @@ from a3docklab.simulation.commands import (
     SimulationObservation,
 )
 from a3docklab.simulation.phases import MissionPhase, PhaseMachine
-from a3docklab.simulation.policies import PolicyAdapter, PolicyDriver, PolicyMetadata
+from a3docklab.simulation.policies import (
+    PolicyAdapter,
+    PolicyDriver,
+    PolicyEvaluation,
+    PolicyMetadata,
+    PolicyRuntimeConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,8 @@ class SimulationFrame:
     decision: CommandDecision | None = None
     shadow_decision: CommandDecision | None = None
     shadow_policy: PolicyMetadata | None = None
+    active_policy_evaluation: PolicyEvaluation | None = None
+    shadow_policy_evaluation: PolicyEvaluation | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +162,8 @@ def _controlled_frames(
     command_resolver: Callable[[SimulationObservation, np.ndarray], CommandDecision] | None = None,
     shadow_resolver: Callable[[SimulationObservation, np.ndarray], CommandDecision] | None = None,
     shadow_policy: PolicyMetadata | None = None,
+    active_evaluation_provider: Callable[[], PolicyEvaluation | None] | None = None,
+    shadow_evaluation_provider: Callable[[], PolicyEvaluation | None] | None = None,
 ) -> Iterator[SimulationFrame]:
     """Yield a phase-controlled mission one observable integration frame at a time."""
     if config.fidelity != "cw":
@@ -467,6 +477,26 @@ def _controlled_frames(
         shadow_decision = (
             shadow_resolver(observation, desired_velocity.copy()) if shadow_resolver else None
         )
+        active_policy_evaluation = (
+            active_evaluation_provider() if active_evaluation_provider else None
+        )
+        shadow_policy_evaluation = (
+            shadow_evaluation_provider() if shadow_evaluation_provider else None
+        )
+        for authority, evaluation in (
+            ("active", active_policy_evaluation),
+            ("shadow", shadow_policy_evaluation),
+        ):
+            if evaluation is not None and evaluation.fallback_applied:
+                events.append(
+                    {
+                        "run_id": run_id,
+                        "time_s": float(time_s),
+                        "event_type": "policy_fallback",
+                        "phase": machine.phase.value,
+                        "detail": f"{authority}:{evaluation.policy.policy_id}:{evaluation.detail}",
+                    }
+                )
         if decision is not None:
             desired_velocity = np.asarray(decision.executed_velocity_m_s, dtype=np.float64)
             if (
@@ -802,6 +832,54 @@ def _controlled_frames(
             "command_executed_tx_n_m": attitude_torque_n_m[0],
             "command_executed_ty_n_m": attitude_torque_n_m[1],
             "command_executed_tz_n_m": attitude_torque_n_m[2],
+            "policy_id": (
+                active_policy_evaluation.policy.policy_id if active_policy_evaluation else ""
+            ),
+            "policy_version": (
+                active_policy_evaluation.policy.policy_version if active_policy_evaluation else ""
+            ),
+            "policy_artifact_uri": (
+                active_policy_evaluation.policy.artifact_uri if active_policy_evaluation else ""
+            ),
+            "policy_configuration_digest": (
+                active_policy_evaluation.policy.configuration_digest
+                if active_policy_evaluation
+                else ""
+            ),
+            "policy_code_revision": (
+                active_policy_evaluation.policy.code_revision if active_policy_evaluation else ""
+            ),
+            "policy_observation_schema_version": (
+                active_policy_evaluation.policy.observation_schema_version
+                if active_policy_evaluation
+                else ""
+            ),
+            "policy_action_schema_version": (
+                active_policy_evaluation.policy.action_schema_version
+                if active_policy_evaluation
+                else ""
+            ),
+            "policy_health": (
+                active_policy_evaluation.health.value if active_policy_evaluation else ""
+            ),
+            "policy_latency_ms": (
+                active_policy_evaluation.latency_ms if active_policy_evaluation else 0.0
+            ),
+            "policy_fallback_applied": (
+                active_policy_evaluation.fallback_applied if active_policy_evaluation else False
+            ),
+            "shadow_policy_id": (
+                shadow_policy_evaluation.policy.policy_id if shadow_policy_evaluation else ""
+            ),
+            "shadow_policy_health": (
+                shadow_policy_evaluation.health.value if shadow_policy_evaluation else ""
+            ),
+            "shadow_policy_latency_ms": (
+                shadow_policy_evaluation.latency_ms if shadow_policy_evaluation else 0.0
+            ),
+            "shadow_policy_fallback_applied": (
+                shadow_policy_evaluation.fallback_applied if shadow_policy_evaluation else False
+            ),
         }
         abort_response_complete = (
             machine.phase == MissionPhase.ABORT
@@ -827,6 +905,8 @@ def _controlled_frames(
             decision=decision,
             shadow_decision=shadow_decision,
             shadow_policy=shadow_policy,
+            active_policy_evaluation=active_policy_evaluation,
+            shadow_policy_evaluation=shadow_policy_evaluation,
         )
         if machine.phase == MissionPhase.COMPLETE or abort_response_complete:
             break
@@ -861,24 +941,34 @@ class SimulationSession:
         authorized_driver_id: str | None = None,
         active_policy: PolicyAdapter | None = None,
         shadow_policy: PolicyAdapter | None = None,
+        active_policy_runtime: PolicyRuntimeConfig | None = None,
+        shadow_policy_runtime: PolicyRuntimeConfig | None = None,
     ) -> None:
         if config.fidelity != "cw":
             raise ValueError("controlled simulation currently requires fidelity='cw'")
         self.config = config
         self.run_id = deterministic_run_id(config)
         self.arbiter = CommandArbiter(config, authorized_driver_id)
-        self.active_policy = PolicyDriver(config, active_policy) if active_policy else None
-        self.shadow_policy = PolicyDriver(config, shadow_policy) if shadow_policy else None
+        self.active_policy = (
+            PolicyDriver(config, active_policy, active_policy_runtime) if active_policy else None
+        )
+        self.shadow_policy = (
+            PolicyDriver(config, shadow_policy, shadow_policy_runtime) if shadow_policy else None
+        )
+        self._active_policy_evaluation: PolicyEvaluation | None = None
         self._pending_intent: ControlIntent | None = None
         self.reset()
 
     def reset(self) -> None:
         """Reset the session to its reproducible pre-step state."""
+        self._active_policy_evaluation = None
         self._frames = _controlled_frames(
             self.config,
             self._resolve_command,
             self.shadow_policy,
             self.shadow_policy.metadata if self.shadow_policy else None,
+            lambda: self._active_policy_evaluation,
+            lambda: self.shadow_policy.last_evaluation if self.shadow_policy else None,
         )
         self._rows: list[dict[str, object]] = []
         self._events: list[dict[str, object]] = []
@@ -908,7 +998,10 @@ class SimulationSession:
         self, observation: SimulationObservation, autopilot_velocity: np.ndarray
     ) -> CommandDecision:
         if self._pending_intent is None and self.active_policy is not None:
-            return self.active_policy(observation, autopilot_velocity)
+            evaluation = self.active_policy.evaluate(observation, autopilot_velocity)
+            self._active_policy_evaluation = evaluation
+            return evaluation.decision
+        self._active_policy_evaluation = None
         return self.arbiter.decide(observation, autopilot_velocity, self._pending_intent)
 
     def pause(self) -> None:
@@ -942,6 +1035,8 @@ class SimulationSession:
             frame.decision,
             frame.shadow_decision,
             frame.shadow_policy,
+            frame.active_policy_evaluation,
+            frame.shadow_policy_evaluation,
         )
 
     def advance(self, steps: int = 1) -> list[SimulationFrame]:
