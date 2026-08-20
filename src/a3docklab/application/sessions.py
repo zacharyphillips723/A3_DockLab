@@ -13,7 +13,16 @@ from uuid import uuid4
 from a3docklab.config import SimulationConfig
 from a3docklab.simulation.commands import ControlIntent, DriverKind, IntentMode
 from a3docklab.simulation.engine import SimulationFrame, SimulationSession
-from a3docklab.simulation.policies import ReferenceAutopilotPolicy
+from a3docklab.simulation.policies import (
+    CorridorMpcPolicy,
+    FallbackMode,
+    MissionAgentPolicy,
+    MlflowPyfuncPolicy,
+    PolicyAdapter,
+    PolicyRuntimeConfig,
+    ReferenceAutopilotPolicy,
+    StationKeepingPolicy,
+)
 
 
 class SessionError(RuntimeError):
@@ -63,12 +72,52 @@ class InteractiveSimulationService:
     def list_scenarios(self) -> list[dict[str, str]]:
         return [{"id": key, "name": config.name} for key, config in self.scenarios.items()]
 
+    @staticmethod
+    def list_policies() -> list[dict[str, str]]:
+        return [
+            {"id": "reference-autopilot", "name": "Reference autopilot"},
+            {"id": "station-keeping", "name": "Station keeping"},
+            {"id": "corridor-mpc", "name": "Corridor MPC"},
+            {"id": "mission-agent", "name": "Rule-based mission agent"},
+        ]
+
+    @staticmethod
+    def _policy(
+        policy_id: str | None,
+        *,
+        model_uri: str | None = None,
+        model_version: str = "unknown",
+        code_revision: str = "unknown",
+    ) -> PolicyAdapter | None:
+        if policy_id is None:
+            return None
+        policies: dict[str, Callable[[], PolicyAdapter]] = {
+            "reference-autopilot": ReferenceAutopilotPolicy,
+            "station-keeping": StationKeepingPolicy,
+            "corridor-mpc": CorridorMpcPolicy,
+            "mission-agent": MissionAgentPolicy,
+        }
+        if policy_id == "mlflow":
+            if not model_uri:
+                raise ValueError("model_uri is required for an MLflow policy")
+            return MlflowPyfuncPolicy.load(model_uri, model_version, code_revision)
+        try:
+            return policies[policy_id]()
+        except KeyError as exc:
+            raise ValueError(f"unknown policy: {policy_id}") from exc
+
     def create(
         self,
         scenario_id: str,
         owner: str,
         fault: str = "none",
+        active_policy_id: str | None = None,
         shadow_policy_id: str | None = None,
+        latency_budget_ms: float = 50.0,
+        fallback_mode: str = "hold",
+        model_uri: str | None = None,
+        model_version: str = "unknown",
+        code_revision: str = "unknown",
     ) -> dict[str, Any]:
         if scenario_id not in self.scenarios:
             raise SessionNotFound(f"unknown scenario: {scenario_id}")
@@ -79,11 +128,29 @@ class InteractiveSimulationService:
         driver_id = f"human:{owner}:{session_id}"
         config = deepcopy(self.scenarios[scenario_id])
         config.handoff.injected_fault = fault  # type: ignore[assignment]
-        if shadow_policy_id not in {None, "reference-autopilot"}:
-            raise ValueError(f"unknown shadow policy: {shadow_policy_id}")
-        shadow_policy = ReferenceAutopilotPolicy() if shadow_policy_id else None
+        active_policy = self._policy(
+            active_policy_id,
+            model_uri=model_uri,
+            model_version=model_version,
+            code_revision=code_revision,
+        )
+        shadow_policy = self._policy(
+            shadow_policy_id,
+            model_uri=model_uri,
+            model_version=model_version,
+            code_revision=code_revision,
+        )
+        runtime = PolicyRuntimeConfig(
+            latency_budget_ms=latency_budget_ms,
+            fallback_mode=FallbackMode(fallback_mode),
+        )
         session = SimulationSession(
-            config, authorized_driver_id=driver_id, shadow_policy=shadow_policy
+            config,
+            authorized_driver_id=driver_id,
+            active_policy=active_policy,
+            shadow_policy=shadow_policy,
+            active_policy_runtime=runtime,
+            shadow_policy_runtime=runtime,
         )
         with self._lock:
             self._sessions[session_id] = {
@@ -97,7 +164,10 @@ class InteractiveSimulationService:
                 "requested_intent": None,
                 "last_frame": None,
                 "fault": fault,
+                "active_policy_id": active_policy_id,
                 "shadow_policy_id": shadow_policy_id,
+                "policy_runtime": runtime.model_dump(mode="json"),
+                "policy_evaluations": [],
             }
         status = self.status(session_id)
         status["control_token"] = token
@@ -142,6 +212,16 @@ class InteractiveSimulationService:
             "shadow_policy": (
                 frame.shadow_policy.model_dump(mode="json") if frame.shadow_policy else None
             ),
+            "active_policy_evaluation": (
+                frame.active_policy_evaluation.model_dump(mode="json")
+                if frame.active_policy_evaluation
+                else None
+            ),
+            "shadow_policy_evaluation": (
+                frame.shadow_policy_evaluation.model_dump(mode="json")
+                if frame.shadow_policy_evaluation
+                else None
+            ),
         }
 
     def status(self, session_id: str) -> dict[str, Any]:
@@ -172,7 +252,9 @@ class InteractiveSimulationService:
                 "scenario_id": entry["scenario_id"],
                 "owner": entry["owner"],
                 "fault": entry["fault"],
+                "active_policy_id": entry["active_policy_id"],
                 "shadow_policy_id": entry["shadow_policy_id"],
+                "policy_runtime": entry["policy_runtime"],
                 "lifecycle": lifecycle,
                 "step_index": session.step_index,
                 "frame": self._frame_payload(entry["last_frame"] or session.current),
@@ -192,11 +274,22 @@ class InteractiveSimulationService:
                 "run_id": session.run_id,
                 "scenario_id": entry["scenario_id"],
                 "fault": entry["fault"],
+                "active_policy_id": entry["active_policy_id"],
                 "shadow_policy_id": entry["shadow_policy_id"],
+                "policy_runtime": entry["policy_runtime"],
                 "commands": [
                     intent.model_dump(mode="json") if intent is not None else None
                     for intent in intents
                 ],
+            }
+
+    def policy_evaluations(self, session_id: str) -> dict[str, Any]:
+        with self._lock:
+            entry = self._entry(session_id)
+            return {
+                "schema_version": "1.0",
+                "session_id": session_id,
+                "evaluations": deepcopy(entry["policy_evaluations"]),
             }
 
     def control(
@@ -224,6 +317,7 @@ class InteractiveSimulationService:
                 entry["command_sequence"] = 0
                 entry["requested_intent"] = None
                 entry["last_frame"] = None
+                entry["policy_evaluations"] = []
             elif action == "terminate":
                 session.pause()
                 entry["terminated"] = True
@@ -234,6 +328,15 @@ class InteractiveSimulationService:
                 try:
                     frame = session.step(intent)
                     entry["last_frame"] = frame
+                    for authority, evaluation in (
+                        ("active", frame.active_policy_evaluation),
+                        ("shadow", frame.shadow_policy_evaluation),
+                    ):
+                        if evaluation is not None:
+                            record = evaluation.model_dump(mode="json")
+                            record["authority"] = authority
+                            record["step_index"] = session.step_index
+                            entry["policy_evaluations"].append(record)
                 except StopIteration:
                     frame = entry["last_frame"] or session.current
             else:

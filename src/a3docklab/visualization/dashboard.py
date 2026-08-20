@@ -402,12 +402,36 @@ def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None =
                             )
                         ],
                     ),
+                    html.Label("Active controller"),
+                    html.Select(
+                        id="live-active-policy",
+                        children=[
+                            html.Option("Human operator", value="", selected=True),
+                            html.Option("Reference autopilot", value="reference-autopilot"),
+                            html.Option("Station keeping", value="station-keeping"),
+                            html.Option("Corridor MPC", value="corridor-mpc"),
+                            html.Option("Rule-based mission agent", value="mission-agent"),
+                        ],
+                    ),
                     html.Label("Shadow policy"),
                     html.Select(
                         id="live-shadow-policy",
                         children=[
                             html.Option("Disabled", value="", selected=True),
                             html.Option("Reference autopilot", value="reference-autopilot"),
+                            html.Option("Station keeping", value="station-keeping"),
+                            html.Option("Corridor MPC", value="corridor-mpc"),
+                            html.Option("Rule-based mission agent", value="mission-agent"),
+                        ],
+                    ),
+                    html.Label("Policy latency budget (ms)"),
+                    dcc.Input(id="live-policy-budget", type="number", value=50, min=1, step=1),
+                    html.Label("Safe fallback"),
+                    html.Select(
+                        id="live-policy-fallback",
+                        children=[
+                            html.Option("Hold", value="hold", selected=True),
+                            html.Option("Reference autopilot", value="autopilot"),
                         ],
                     ),
                     html.Div(
@@ -473,6 +497,9 @@ def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None =
                     html.Div(
                         [
                             html.Div([html.H3("Safety decision"), html.Pre(id="live-decision")]),
+                            html.Div(
+                                [html.H3("Policy runtime"), html.Pre(id="live-policy-health")]
+                            ),
                             html.Div([html.H3("Shadow policy"), html.Pre(id="live-shadow")]),
                             html.Div([html.H3("Event stream"), html.Pre(id="live-events")]),
                         ],

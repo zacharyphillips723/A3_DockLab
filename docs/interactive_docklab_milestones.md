@@ -112,6 +112,9 @@ Replace replay-first interaction with a live cockpit and simulation laboratory.
 
 ## Milestone 4 — Model-driver interface
 
+**Status: complete.** See `docs/milestone_4_policy_interface.md` for the shipped
+runtime, adapters, provenance, and acceptance evidence.
+
 ### Goal
 
 Let control models drive the same guarded session API used by humans and the

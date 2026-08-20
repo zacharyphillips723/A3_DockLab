@@ -91,6 +91,26 @@ def test_live_api_round_trip_and_lease_enforcement(
     assert commands.json["commands"][0]["desired_velocity_m_s"] == [-0.1, 0.0, 0.0]
 
 
+def test_policy_catalog_and_evaluation_api(service: InteractiveSimulationService) -> None:
+    server = Flask(__name__)
+    register_simulation_routes(server, service)
+    client = server.test_client()
+    policies = client.get("/api/simulations/policies")
+    assert {row["id"] for row in policies.json} >= {"corridor-mpc", "mission-agent"}
+    created = client.post(
+        "/api/simulations",
+        json={"scenario_id": "blue_moon_side", "active_policy_id": "corridor-mpc"},
+    )
+    client.post(
+        "/api/simulations/session-1/control",
+        json={"action": "step"},
+        headers={"Authorization": f"Bearer {created.json['control_token']}"},
+    )
+    evaluations = client.get("/api/simulations/session-1/policy-evaluations")
+    assert evaluations.status_code == 200
+    assert evaluations.json["evaluations"][0]["policy"]["policy_id"] == "corridor-mpc"
+
+
 def test_fault_selection_is_validated(service: InteractiveSimulationService) -> None:
     created = service.create("blue_moon_side", "pilot@example.com", "stale_data")
     assert created["fault"] == "stale_data"
@@ -115,3 +135,21 @@ def test_shadow_policy_is_exposed_without_taking_authority(
     assert stepped["frame"]["shadow_decision"]["requested_mode"] == "autopilot"
     assert stepped["frame"]["shadow_policy"]["policy_version"] == "1.0.0"
     assert stepped["frame"]["state"]["command_requested_mode"] == "hold"
+
+
+def test_active_policy_and_evaluation_history(service: InteractiveSimulationService) -> None:
+    created = service.create(
+        "blue_moon_side",
+        "pilot@example.com",
+        active_policy_id="corridor-mpc",
+        shadow_policy_id="station-keeping",
+        latency_budget_ms=100,
+        fallback_mode="hold",
+    )
+    stepped = service.control(created["session_id"], created["control_token"], "step")
+    history = service.policy_evaluations(created["session_id"])
+
+    assert stepped["frame"]["active_policy_evaluation"]["health"] == "healthy"
+    assert stepped["frame"]["shadow_policy_evaluation"]["health"] == "healthy"
+    assert stepped["frame"]["decision"]["driver_id"] == "corridor-mpc"
+    assert [row["authority"] for row in history["evaluations"]] == ["active", "shadow"]
