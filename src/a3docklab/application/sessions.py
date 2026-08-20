@@ -19,7 +19,11 @@ from a3docklab.application.state import (
 )
 from a3docklab.config import SimulationConfig
 from a3docklab.simulation.commands import ControlIntent, DriverKind, IntentMode
-from a3docklab.simulation.engine import SimulationFrame, SimulationSession
+from a3docklab.simulation.engine import (
+    SimulationFrame,
+    SimulationSession,
+    serialize_checkpoint,
+)
 from a3docklab.simulation.policies import (
     CorridorMpcPolicy,
     FallbackMode,
@@ -250,6 +254,10 @@ class InteractiveSimulationService:
         if self._state_store is None:
             return
         snapshot = self.status(session_id)
+        session: SimulationSession = entry["session"]
+        engine_checkpoint = (
+            serialize_checkpoint(session.checkpoint()) if session.current is not None else None
+        )
         try:
             durable = self._state_store.update_session_checkpoint(
                 session_id,
@@ -261,6 +269,7 @@ class InteractiveSimulationService:
                     "policy_runtime": entry["policy_runtime"],
                     "step_index": snapshot["step_index"],
                     "checkpoint": snapshot["checkpoint"],
+                    "engine_checkpoint": engine_checkpoint,
                     "requested_intent": snapshot["requested_intent"],
                 },
                 cast(int, entry["persisted_version"]),

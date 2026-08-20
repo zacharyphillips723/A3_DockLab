@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -93,6 +93,59 @@ class SimulationCheckpoint:
     time_s: float
     state: dict[str, object]
     intents: tuple[ControlIntent | None, ...] = ()
+
+
+CHECKPOINT_SCHEMA_VERSION = "1.0"
+
+
+def _checkpoint_json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _checkpoint_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_checkpoint_json_value(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_checkpoint_json_value(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def serialize_checkpoint(checkpoint: SimulationCheckpoint) -> dict[str, Any]:
+    """Encode a deterministic engine checkpoint using a versioned JSON contract."""
+    return {
+        "schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "run_id": checkpoint.run_id,
+        "step_index": checkpoint.step_index,
+        "time_s": checkpoint.time_s,
+        "state": _checkpoint_json_value(checkpoint.state),
+        "intents": [
+            intent.model_dump(mode="json") if intent is not None else None
+            for intent in checkpoint.intents
+        ],
+    }
+
+
+def deserialize_checkpoint(payload: dict[str, Any]) -> SimulationCheckpoint:
+    """Validate and decode a persisted deterministic engine checkpoint."""
+    if payload.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+        raise ValueError("unsupported simulation checkpoint schema version")
+    state = payload.get("state")
+    intents = payload.get("intents")
+    if not isinstance(state, dict) or not isinstance(intents, list):
+        raise TypeError("simulation checkpoint state and intents are required")
+    checkpoint = SimulationCheckpoint(
+        run_id=str(payload["run_id"]),
+        step_index=int(payload["step_index"]),
+        time_s=float(payload["time_s"]),
+        state=state,
+        intents=tuple(
+            ControlIntent.model_validate(intent) if intent is not None else None
+            for intent in intents
+        ),
+    )
+    if checkpoint.step_index < 0 or len(checkpoint.intents) != checkpoint.step_index + 1:
+        raise ValueError("checkpoint command log length does not match its step index")
+    return checkpoint
 
 
 def run_cw(config: SimulationConfig) -> SimulationResult:

@@ -26,11 +26,14 @@ Databricks App uses for ownership, recovery, and command admission.
 - Successful control operations write a fresh lifecycle checkpoint. Browser
   requests include unique idempotency keys, and lease expiry or a competing
   durable writer fails closed.
+- Engine checkpoints now use an explicit `1.0` JSON schema containing the
+  deterministic state and complete intent sequence. JSON round-trip tests
+  verify that replaying this payload produces the same subsequent frame.
 
 ## Remaining integration slices
 
-1. Serialize the complete engine checkpoint and reconstruct a session after an
-   App restart, then test process-to-process takeover after lease expiry.
+1. Reconstruct a session from the versioned engine checkpoint after an App
+   restart, then test process-to-process takeover after lease expiry.
 2. Materialize telemetry, decisions, command history, and completed-run
    manifests to Delta with operator and policy lineage.
 3. Connect MLflow policy identity/evaluation records and Databricks Jobs for
