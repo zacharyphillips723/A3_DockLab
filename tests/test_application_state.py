@@ -1,10 +1,15 @@
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from a3docklab.application.state import (
+    AcceptedCommand,
     ApplicationStateStore,
+    DurableSession,
     RunReview,
+    hash_lease_token,
     new_comparison,
     new_saved_view,
 )
@@ -58,3 +63,103 @@ def test_application_state_is_owner_and_run_scoped(tmp_path: Path) -> None:
 
     assert [item.text for item in store.list_annotations("run-a")] == ["A"]
     assert [item.name for item in store.list_views("a@example.com")] == ["A view"]
+
+
+def test_durable_session_checkpoint_survives_store_restart(tmp_path: Path) -> None:
+    path = tmp_path / "state.db"
+    store = _store(path)
+    created_at = datetime.now(UTC)
+    store.create_durable_session(
+        DurableSession(
+            session_id="session-1",
+            scenario_id="nominal",
+            owner="operator@example.com",
+            status="paused",
+            updated_at_utc=created_at,
+        )
+    )
+
+    leased = store.acquire_session_lease(
+        "session-1",
+        "browser-1",
+        hash_lease_token("secret-token"),
+        created_at + timedelta(minutes=1),
+        expected_version=0,
+        now_utc=created_at,
+    )
+    checkpointed = store.update_session_checkpoint(
+        "session-1",
+        "running",
+        {"simulation_time_s": 12.5, "state": {"range_m": 42.0}},
+        expected_version=leased.version,
+    )
+
+    restored = _store(path).get_durable_session("session-1")
+    assert restored == checkpointed
+    assert restored is not None
+    assert restored.checkpoint == {"simulation_time_s": 12.5, "state": {"range_m": 42.0}}
+    assert restored.lease_token_hash == hash_lease_token("secret-token")
+    assert restored.lease_token_hash != "secret-token"
+
+
+def test_session_lease_is_exclusive_and_uses_optimistic_version(tmp_path: Path) -> None:
+    store = _store(tmp_path / "state.db")
+    now = datetime.now(UTC)
+    store.create_durable_session(
+        DurableSession(
+            session_id="session-1",
+            scenario_id="nominal",
+            owner="operator@example.com",
+            status="paused",
+            updated_at_utc=now,
+        )
+    )
+    first = store.acquire_session_lease(
+        "session-1", "browser-1", hash_lease_token("one"), now + timedelta(seconds=30), 0, now
+    )
+
+    with pytest.raises(RuntimeError, match="lease conflict"):
+        store.acquire_session_lease(
+            "session-1", "browser-2", hash_lease_token("two"), now + timedelta(minutes=1), 1, now
+        )
+    with pytest.raises(RuntimeError, match="lease conflict"):
+        store.acquire_session_lease(
+            "session-1",
+            "browser-1",
+            hash_lease_token("one"),
+            now + timedelta(minutes=1),
+            0,
+            now,
+        )
+
+    takeover = store.acquire_session_lease(
+        "session-1",
+        "browser-2",
+        hash_lease_token("two"),
+        now + timedelta(minutes=2),
+        first.version,
+        now + timedelta(seconds=31),
+    )
+    assert takeover.lease_holder == "browser-2"
+    assert takeover.version == 2
+
+
+def test_accepted_commands_are_idempotent(tmp_path: Path) -> None:
+    store = _store(tmp_path / "state.db")
+    command = AcceptedCommand(
+        session_id="session-1",
+        command_id="command-1",
+        idempotency_key="request-1",
+        actor="operator@example.com",
+        payload={"kind": "hold"},
+        accepted_at_utc=datetime.now(UTC),
+    )
+
+    assert store.record_accepted_command(command) == command
+    assert (
+        store.record_accepted_command(command.model_copy(update={"command_id": "retry"})) == command
+    )
+    with pytest.raises(RuntimeError, match="different payload"):
+        store.record_accepted_command(
+            command.model_copy(update={"command_id": "command-2", "payload": {"kind": "abort"}})
+        )
