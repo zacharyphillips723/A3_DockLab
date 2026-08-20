@@ -1,10 +1,17 @@
+import json
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from a3docklab.config import load_config
-from a3docklab.simulation.engine import SimulationCheckpoint, SimulationSession, run_controlled
+from a3docklab.simulation.engine import (
+    SimulationCheckpoint,
+    SimulationSession,
+    deserialize_checkpoint,
+    run_controlled,
+    serialize_checkpoint,
+)
 
 
 @pytest.fixture(scope="module")
@@ -58,6 +65,34 @@ def test_checkpoint_restore_reproduces_subsequent_frames(scenario_path: Path) ->
             pd.Series(actual_frame.state), pd.Series(expected_frame.state), check_names=False
         )
         assert actual_frame.events == expected_frame.events
+
+
+def test_versioned_checkpoint_survives_json_round_trip(scenario_path: Path) -> None:
+    config = load_config(scenario_path)
+    original = SimulationSession(config)
+    for _ in range(12):
+        original.step()
+    payload = json.loads(json.dumps(serialize_checkpoint(original.checkpoint())))
+    expected = original.step()
+
+    restored = SimulationSession(config)
+    restored.restore(deserialize_checkpoint(payload))
+    actual = restored.step()
+
+    pd.testing.assert_series_equal(
+        pd.Series(actual.state), pd.Series(expected.state), check_names=False
+    )
+    assert actual.events == expected.events
+
+
+def test_checkpoint_decoder_rejects_unknown_schema(scenario_path: Path) -> None:
+    session = SimulationSession(load_config(scenario_path))
+    session.step()
+    payload = serialize_checkpoint(session.checkpoint())
+    payload["schema_version"] = "99.0"
+
+    with pytest.raises(ValueError, match="unsupported simulation checkpoint"):
+        deserialize_checkpoint(payload)
 
 
 def test_checkpoint_rejects_another_configuration(scenario_path: Path) -> None:

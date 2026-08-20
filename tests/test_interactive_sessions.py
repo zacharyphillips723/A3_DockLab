@@ -105,6 +105,8 @@ def test_durable_service_persists_lifecycle_and_idempotent_control(tmp_path: Pat
     assert durable is not None
     assert durable.checkpoint is not None
     assert durable.checkpoint["checkpoint"]["command_count"] == 1
+    assert durable.checkpoint["engine_checkpoint"]["schema_version"] == "1.0"
+    assert len(durable.checkpoint["engine_checkpoint"]["intents"]) == 1
 
 
 def test_durable_service_rejects_wrong_actor_expired_lease_and_stale_writer(
