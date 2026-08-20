@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -48,6 +49,28 @@ class SavedComparison(BaseModel):
     candidate_run_id: str
     alignment: Literal["event_time", "mission_phase"] = "event_time"
     updated_at_utc: datetime
+
+
+class DurableSession(BaseModel):
+    session_id: str
+    scenario_id: str
+    owner: str
+    status: Literal["paused", "running", "complete", "terminated"]
+    version: int = 0
+    lease_holder: str | None = None
+    lease_token_hash: str | None = None
+    lease_expires_at_utc: datetime | None = None
+    checkpoint: dict[str, Any] | None = None
+    updated_at_utc: datetime
+
+
+class AcceptedCommand(BaseModel):
+    session_id: str
+    command_id: str
+    idempotency_key: str
+    actor: str
+    payload: dict[str, Any]
+    accepted_at_utc: datetime
 
 
 class PostgresConnectionFactory:
@@ -97,6 +120,20 @@ class ApplicationStateStore:
         finally:
             connection.close()
 
+    def _execute_count(self, statement: str, parameters: Sequence[object] = ()) -> int:
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(statement, tuple(parameters))
+                count = int(cursor.rowcount)
+                connection.commit()
+                return count
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
     def initialize(self) -> None:
         statements = (
             """CREATE TABLE IF NOT EXISTS annotations (
@@ -114,6 +151,16 @@ class ApplicationStateStore:
                 comparison_id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,
                 baseline_run_id TEXT NOT NULL, candidate_run_id TEXT NOT NULL,
                 alignment TEXT NOT NULL, updated_at_utc TEXT NOT NULL)""",
+            """CREATE TABLE IF NOT EXISTS simulation_sessions (
+                session_id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL, owner TEXT NOT NULL,
+                status TEXT NOT NULL, version BIGINT NOT NULL, lease_holder TEXT,
+                lease_token_hash TEXT, lease_expires_at_utc TEXT, checkpoint_json TEXT,
+                updated_at_utc TEXT NOT NULL)""",
+            """CREATE TABLE IF NOT EXISTS accepted_commands (
+                session_id TEXT NOT NULL, command_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL, actor TEXT NOT NULL, payload_json TEXT NOT NULL,
+                accepted_at_utc TEXT NOT NULL, PRIMARY KEY (session_id, command_id),
+                UNIQUE (session_id, idempotency_key))""",
         )
         for statement in statements:
             self._execute(statement)
@@ -260,6 +307,153 @@ class ApplicationStateStore:
             )
             for row in rows
         ]
+
+    def create_durable_session(self, session: DurableSession) -> None:
+        marks = ", ".join([self.placeholder] * 10)
+        self._execute(
+            f"INSERT INTO simulation_sessions VALUES ({marks})",
+            (
+                session.session_id,
+                session.scenario_id,
+                session.owner,
+                session.status,
+                session.version,
+                session.lease_holder,
+                session.lease_token_hash,
+                session.lease_expires_at_utc.isoformat() if session.lease_expires_at_utc else None,
+                json.dumps(session.checkpoint, sort_keys=True) if session.checkpoint else None,
+                session.updated_at_utc.isoformat(),
+            ),
+        )
+
+    def get_durable_session(self, session_id: str) -> DurableSession | None:
+        rows = self._execute(
+            "SELECT session_id, scenario_id, owner, status, version, lease_holder, "
+            "lease_token_hash, lease_expires_at_utc, checkpoint_json, updated_at_utc "
+            f"FROM simulation_sessions WHERE session_id = {self.placeholder}",
+            (session_id,),
+            fetch=True,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return DurableSession(
+            session_id=row[0],
+            scenario_id=row[1],
+            owner=row[2],
+            status=row[3],
+            version=row[4],
+            lease_holder=row[5],
+            lease_token_hash=row[6],
+            lease_expires_at_utc=row[7],
+            checkpoint=json.loads(row[8]) if row[8] else None,
+            updated_at_utc=row[9],
+        )
+
+    def acquire_session_lease(
+        self,
+        session_id: str,
+        holder: str,
+        token_hash: str,
+        expires_at_utc: datetime,
+        expected_version: int,
+        now_utc: datetime | None = None,
+    ) -> DurableSession:
+        now = now_utc or self._now()
+        count = self._execute_count(
+            f"UPDATE simulation_sessions SET lease_holder = {self.placeholder}, lease_token_hash = {self.placeholder}, "
+            f"lease_expires_at_utc = {self.placeholder}, version = version + 1, updated_at_utc = {self.placeholder} "
+            f"WHERE session_id = {self.placeholder} AND version = {self.placeholder} AND "
+            f"(lease_holder IS NULL OR lease_expires_at_utc < {self.placeholder} OR lease_holder = {self.placeholder})",
+            (
+                holder,
+                token_hash,
+                expires_at_utc.isoformat(),
+                now.isoformat(),
+                session_id,
+                expected_version,
+                now.isoformat(),
+                holder,
+            ),
+        )
+        if count != 1:
+            raise RuntimeError("session lease conflict")
+        result = self.get_durable_session(session_id)
+        assert result is not None
+        return result
+
+    def update_session_checkpoint(
+        self,
+        session_id: str,
+        status: Literal["paused", "running", "complete", "terminated"],
+        checkpoint: dict[str, Any],
+        expected_version: int,
+    ) -> DurableSession:
+        count = self._execute_count(
+            f"UPDATE simulation_sessions SET status = {self.placeholder}, checkpoint_json = {self.placeholder}, "
+            f"version = version + 1, updated_at_utc = {self.placeholder} "
+            f"WHERE session_id = {self.placeholder} AND version = {self.placeholder}",
+            (
+                status,
+                json.dumps(checkpoint, sort_keys=True),
+                self._now().isoformat(),
+                session_id,
+                expected_version,
+            ),
+        )
+        if count != 1:
+            raise RuntimeError("session version conflict")
+        result = self.get_durable_session(session_id)
+        assert result is not None
+        return result
+
+    def record_accepted_command(self, command: AcceptedCommand) -> AcceptedCommand:
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            try:
+                marks = ", ".join([self.placeholder] * 6)
+                cursor.execute(
+                    f"INSERT INTO accepted_commands VALUES ({marks}) ON CONFLICT DO NOTHING",
+                    (
+                        command.session_id,
+                        command.command_id,
+                        command.idempotency_key,
+                        command.actor,
+                        json.dumps(command.payload, sort_keys=True),
+                        command.accepted_at_utc.isoformat(),
+                    ),
+                )
+                cursor.execute(
+                    "SELECT session_id, command_id, idempotency_key, actor, payload_json, "
+                    f"accepted_at_utc FROM accepted_commands WHERE session_id = {self.placeholder} "
+                    f"AND idempotency_key = {self.placeholder}",
+                    (command.session_id, command.idempotency_key),
+                )
+                row = cursor.fetchone()
+                connection.commit()
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+        if row is None:
+            raise RuntimeError("command identifier conflict")
+        saved = AcceptedCommand(
+            session_id=row[0],
+            command_id=row[1],
+            idempotency_key=row[2],
+            actor=row[3],
+            payload=json.loads(row[4]),
+            accepted_at_utc=row[5],
+        )
+        if saved.payload != command.payload:
+            raise RuntimeError("idempotency key reused with different payload")
+        return saved
+
+
+def hash_lease_token(token: str) -> str:
+    """Return the non-reversible representation persisted for a session lease."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def new_saved_view(owner: str, name: str, run_id: str, **window: Any) -> SavedView:
