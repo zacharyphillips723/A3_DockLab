@@ -140,9 +140,10 @@ reference autopilot.
 
 ## Milestone 5 — Databricks session control plane
 
-**Status:** In progress. The durable Lakebase-compatible session, lease,
-checkpoint, optimistic-concurrency, and idempotent-command foundation is
-implemented; runtime binding and Delta/MLflow materialization remain.
+**Status:** In progress. Durable sessions are bound to the live runtime with
+owner authorization, lease renewal, optimistic concurrency, versioned
+checkpoints, and idempotent commands. Full engine reconstruction and
+Delta/MLflow materialization remain.
 
 ### Goal
 

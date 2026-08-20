@@ -144,6 +144,54 @@ def test_session_lease_is_exclusive_and_uses_optimistic_version(tmp_path: Path) 
     assert takeover.version == 2
 
 
+def test_session_lease_renewal_requires_current_token_and_unexpired_lease(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path / "state.db")
+    now = datetime.now(UTC)
+    store.create_durable_session(
+        DurableSession(
+            session_id="session-1",
+            scenario_id="nominal",
+            owner="operator@example.com",
+            status="paused",
+            updated_at_utc=now,
+        )
+    )
+    leased = store.acquire_session_lease(
+        "session-1", "app-1", hash_lease_token("one"), now + timedelta(seconds=30), 0, now
+    )
+    renewed = store.renew_session_lease(
+        "session-1",
+        "app-1",
+        hash_lease_token("one"),
+        now + timedelta(minutes=1),
+        leased.version,
+        now + timedelta(seconds=10),
+    )
+    assert renewed.version == 2
+    assert renewed.lease_expires_at_utc == now + timedelta(minutes=1)
+
+    with pytest.raises(RuntimeError, match="invalid, expired, or stale"):
+        store.renew_session_lease(
+            "session-1",
+            "app-1",
+            hash_lease_token("wrong"),
+            now + timedelta(minutes=2),
+            renewed.version,
+            now + timedelta(seconds=20),
+        )
+    with pytest.raises(RuntimeError, match="invalid, expired, or stale"):
+        store.renew_session_lease(
+            "session-1",
+            "app-1",
+            hash_lease_token("one"),
+            now + timedelta(minutes=3),
+            renewed.version,
+            now + timedelta(minutes=2),
+        )
+
+
 def test_accepted_commands_are_idempotent(tmp_path: Path) -> None:
     store = _store(tmp_path / "state.db")
     command = AcceptedCommand(

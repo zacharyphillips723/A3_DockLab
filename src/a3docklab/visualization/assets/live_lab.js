@@ -10,12 +10,17 @@
   const setText = (id, text) => { const node = byId(id); if (node) node.textContent = text; };
 
   async function api(path, options) {
-    const headers = {"Content-Type": "application/json"};
+    const headers = {"Content-Type": "application/json", ...(options.headers || {})};
     if (live.token) headers.Authorization = `Bearer ${live.token}`;
     const response = await fetch(path, {...options, headers});
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     return body;
+  }
+
+  function requestId() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
   function dropdownRawValue(id) {
@@ -75,7 +80,7 @@
     if (!live.sessionId || live.busy) return;
     live.busy = true;
     try {
-      const payload = await api(`/api/simulations/${live.sessionId}/control`, {method: "POST", body: JSON.stringify({action, ...(withIntent ? {intent: intent()} : {})})});
+      const payload = await api(`/api/simulations/${live.sessionId}/control`, {method: "POST", headers: {"Idempotency-Key": requestId()}, body: JSON.stringify({action, ...(withIntent ? {intent: intent()} : {})})});
       render(payload, action === "reset");
       setText("live-lease", `Control lease: ${payload.owner} · ${payload.lifecycle}`);
       return payload;
