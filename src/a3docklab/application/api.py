@@ -111,6 +111,15 @@ def register_simulation_routes(server: Any, service: InteractiveSimulationServic
     @server.post("/api/simulations/<session_id>/control")  # type: ignore[untyped-decorator]
     def simulation_control(session_id: str) -> tuple[object, int]:
         payload = request.get_json(silent=True) or {}
+        actor = request.headers.get("X-Forwarded-Email")
+        idempotency_key = request.headers.get("Idempotency-Key")
         return handle(
-            lambda: service.control(session_id, token(), str(payload.get("action", "")), payload)
+            lambda: service.control(
+                session_id,
+                token(),
+                str(payload.get("action", "")),
+                payload,
+                actor=actor,
+                idempotency_key=idempotency_key,
+            )
         )

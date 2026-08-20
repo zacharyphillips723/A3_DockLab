@@ -382,6 +382,39 @@ class ApplicationStateStore:
         assert result is not None
         return result
 
+    def renew_session_lease(
+        self,
+        session_id: str,
+        holder: str,
+        token_hash: str,
+        expires_at_utc: datetime,
+        expected_version: int,
+        now_utc: datetime | None = None,
+    ) -> DurableSession:
+        """Extend an unexpired lease only when holder, token, and version agree."""
+        now = now_utc or self._now()
+        count = self._execute_count(
+            f"UPDATE simulation_sessions SET lease_expires_at_utc = {self.placeholder}, "
+            f"version = version + 1, updated_at_utc = {self.placeholder} "
+            f"WHERE session_id = {self.placeholder} AND version = {self.placeholder} "
+            f"AND lease_holder = {self.placeholder} AND lease_token_hash = {self.placeholder} "
+            f"AND lease_expires_at_utc >= {self.placeholder}",
+            (
+                expires_at_utc.isoformat(),
+                now.isoformat(),
+                session_id,
+                expected_version,
+                holder,
+                token_hash,
+                now.isoformat(),
+            ),
+        )
+        if count != 1:
+            raise RuntimeError("session lease is invalid, expired, or stale")
+        result = self.get_durable_session(session_id)
+        assert result is not None
+        return result
+
     def update_session_checkpoint(
         self,
         session_id: str,

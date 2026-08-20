@@ -1,3 +1,5 @@
+import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ from a3docklab.application.sessions import (
     SessionConflict,
     SessionUnauthorized,
 )
+from a3docklab.application.state import ApplicationStateStore
 from a3docklab.config import load_config
 
 
@@ -20,6 +23,24 @@ def service() -> InteractiveSimulationService:
         id_factory=lambda: "session-1",
         token_factory=lambda: "lease-1",
     )
+
+
+def _durable_service(
+    tmp_path: Path, now: list[datetime]
+) -> tuple[InteractiveSimulationService, ApplicationStateStore]:
+    store = ApplicationStateStore(lambda: sqlite3.connect(tmp_path / "state.db"), "?")
+    store.initialize()
+    path = Path(__file__).resolve().parents[1] / "configs/scenarios/blue_moon_side.yaml"
+    service = InteractiveSimulationService(
+        {"blue_moon_side": load_config(path)},
+        id_factory=lambda: "session-1",
+        token_factory=lambda: "lease-1",
+        state_store=store,
+        lease_duration=timedelta(seconds=30),
+        clock=lambda: now[0],
+        holder_id="app-1",
+    )
+    return service, store
 
 
 def test_session_lifecycle_and_reconnect_checkpoint(
@@ -52,6 +73,123 @@ def test_control_lease_prevents_a_second_driver(
     service.create("blue_moon_side", "pilot@example.com")
     with pytest.raises(SessionUnauthorized, match="control lease"):
         service.control("session-1", "another-token", "step")
+
+
+def test_durable_service_persists_lifecycle_and_idempotent_control(tmp_path: Path) -> None:
+    now = [datetime.now(UTC)]
+    service, store = _durable_service(tmp_path, now)
+    created = service.create("blue_moon_side", "pilot@example.com")
+    durable = store.get_durable_session("session-1")
+    assert durable is not None
+    assert durable.owner == "pilot@example.com"
+    assert durable.lease_holder == "app-1"
+
+    stepped = service.control(
+        "session-1",
+        created["control_token"],
+        "step",
+        {"intent": {"mode": "hold"}},
+        actor="pilot@example.com",
+        idempotency_key="request-1",
+    )
+    duplicate = service.control(
+        "session-1",
+        created["control_token"],
+        "step",
+        {"intent": {"mode": "hold"}},
+        actor="pilot@example.com",
+        idempotency_key="request-1",
+    )
+    assert duplicate["step_index"] == stepped["step_index"] == 0
+    durable = store.get_durable_session("session-1")
+    assert durable is not None
+    assert durable.checkpoint is not None
+    assert durable.checkpoint["checkpoint"]["command_count"] == 1
+
+
+def test_durable_service_rejects_wrong_actor_expired_lease_and_stale_writer(
+    tmp_path: Path,
+) -> None:
+    now = [datetime.now(UTC)]
+    service, store = _durable_service(tmp_path, now)
+    created = service.create("blue_moon_side", "pilot@example.com")
+
+    with pytest.raises(SessionUnauthorized, match="owner identity"):
+        service.control(
+            "session-1",
+            created["control_token"],
+            "step",
+            actor="intruder@example.com",
+            idempotency_key="wrong-actor",
+        )
+
+    durable = store.get_durable_session("session-1")
+    assert durable is not None
+    store.update_session_checkpoint("session-1", "paused", {"external": True}, durable.version)
+    with pytest.raises(SessionUnauthorized, match="expired or stale"):
+        service.control(
+            "session-1",
+            created["control_token"],
+            "step",
+            actor="pilot@example.com",
+            idempotency_key="stale-writer",
+        )
+
+    expired_path = tmp_path / "expired"
+    expired_path.mkdir()
+    service, _ = _durable_service(expired_path, now)
+    created = service.create("blue_moon_side", "pilot@example.com")
+    now[0] += timedelta(seconds=31)
+    with pytest.raises(SessionUnauthorized, match="expired or stale"):
+        service.control(
+            "session-1",
+            created["control_token"],
+            "step",
+            actor="pilot@example.com",
+            idempotency_key="expired",
+        )
+
+
+def test_durable_control_api_requires_identity_and_idempotency_key(tmp_path: Path) -> None:
+    now = [datetime.now(UTC)]
+    service, _ = _durable_service(tmp_path, now)
+    server = Flask(__name__)
+    register_simulation_routes(server, service)
+    client = server.test_client()
+    created = client.post(
+        "/api/simulations",
+        json={"scenario_id": "blue_moon_side"},
+        headers={"X-Forwarded-Email": "pilot@example.com"},
+    )
+    authorization = {"Authorization": f"Bearer {created.json['control_token']}"}
+
+    assert (
+        client.post(
+            "/api/simulations/session-1/control",
+            json={"action": "step"},
+            headers=authorization,
+        ).status_code
+        == 403
+    )
+    missing_key = client.post(
+        "/api/simulations/session-1/control",
+        json={"action": "step"},
+        headers={**authorization, "X-Forwarded-Email": "pilot@example.com"},
+    )
+    assert missing_key.status_code == 400
+    headers = {
+        **authorization,
+        "X-Forwarded-Email": "pilot@example.com",
+        "Idempotency-Key": "request-1",
+    }
+    first = client.post(
+        "/api/simulations/session-1/control", json={"action": "step"}, headers=headers
+    )
+    duplicate = client.post(
+        "/api/simulations/session-1/control", json={"action": "step"}, headers=headers
+    )
+    assert first.status_code == duplicate.status_code == 200
+    assert first.json["step_index"] == duplicate.json["step_index"] == 0
 
 
 def test_live_api_round_trip_and_lease_enforcement(

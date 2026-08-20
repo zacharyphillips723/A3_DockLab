@@ -5,11 +5,18 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
 from threading import RLock
 from typing import Any, cast
 from uuid import uuid4
 
+from a3docklab.application.state import (
+    AcceptedCommand,
+    ApplicationStateStore,
+    DurableSession,
+    hash_lease_token,
+)
 from a3docklab.config import SimulationConfig
 from a3docklab.simulation.commands import ControlIntent, DriverKind, IntentMode
 from a3docklab.simulation.engine import SimulationFrame, SimulationSession
@@ -62,10 +69,18 @@ class InteractiveSimulationService:
         *,
         id_factory: Callable[[], str] | None = None,
         token_factory: Callable[[], str] | None = None,
+        state_store: ApplicationStateStore | None = None,
+        lease_duration: timedelta = timedelta(seconds=30),
+        clock: Callable[[], datetime] | None = None,
+        holder_id: str | None = None,
     ) -> None:
         self.scenarios = dict(scenarios)
         self._id_factory = id_factory or (lambda: str(uuid4()))
         self._token_factory = token_factory or (lambda: token_urlsafe(32))
+        self._state_store = state_store
+        self._lease_duration = lease_duration
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._holder_id = holder_id or f"app:{uuid4()}"
         self._sessions: dict[str, dict[str, Any]] = {}
         self._lock = RLock()
 
@@ -152,6 +167,33 @@ class InteractiveSimulationService:
             active_policy_runtime=runtime,
             shadow_policy_runtime=runtime,
         )
+        persisted_version: int | None = None
+        now = self._clock()
+        if self._state_store is not None:
+            self._state_store.create_durable_session(
+                DurableSession(
+                    session_id=session_id,
+                    scenario_id=scenario_id,
+                    owner=owner,
+                    status="paused",
+                    checkpoint={
+                        "fault": fault,
+                        "active_policy_id": active_policy_id,
+                        "shadow_policy_id": shadow_policy_id,
+                        "policy_runtime": runtime.model_dump(mode="json"),
+                    },
+                    updated_at_utc=now,
+                )
+            )
+            persisted = self._state_store.acquire_session_lease(
+                session_id,
+                self._holder_id,
+                hash_lease_token(token),
+                now + self._lease_duration,
+                expected_version=0,
+                now_utc=now,
+            )
+            persisted_version = persisted.version
         with self._lock:
             self._sessions[session_id] = {
                 "session": session,
@@ -161,6 +203,7 @@ class InteractiveSimulationService:
                 "driver_id": driver_id,
                 "terminated": False,
                 "command_sequence": 0,
+                "request_sequence": 0,
                 "requested_intent": None,
                 "last_frame": None,
                 "fault": fault,
@@ -168,6 +211,7 @@ class InteractiveSimulationService:
                 "shadow_policy_id": shadow_policy_id,
                 "policy_runtime": runtime.model_dump(mode="json"),
                 "policy_evaluations": [],
+                "persisted_version": persisted_version,
             }
         status = self.status(session_id)
         status["control_token"] = token
@@ -183,6 +227,73 @@ class InteractiveSimulationService:
     def _authorize(entry: dict[str, Any], token: str | None) -> None:
         if not token or token != entry["token"]:
             raise SessionUnauthorized("the active control lease is required")
+
+    def _renew_durable_lease(self, session_id: str, entry: dict[str, Any], token: str) -> None:
+        if self._state_store is None:
+            return
+        expected_version = cast(int, entry["persisted_version"])
+        now = self._clock()
+        try:
+            durable = self._state_store.renew_session_lease(
+                session_id,
+                self._holder_id,
+                hash_lease_token(token),
+                now + self._lease_duration,
+                expected_version,
+                now,
+            )
+        except RuntimeError as exc:
+            raise SessionUnauthorized("the durable control lease is expired or stale") from exc
+        entry["persisted_version"] = durable.version
+
+    def _persist_checkpoint(self, session_id: str, entry: dict[str, Any]) -> None:
+        if self._state_store is None:
+            return
+        snapshot = self.status(session_id)
+        try:
+            durable = self._state_store.update_session_checkpoint(
+                session_id,
+                snapshot["lifecycle"],
+                {
+                    "fault": entry["fault"],
+                    "active_policy_id": entry["active_policy_id"],
+                    "shadow_policy_id": entry["shadow_policy_id"],
+                    "policy_runtime": entry["policy_runtime"],
+                    "step_index": snapshot["step_index"],
+                    "checkpoint": snapshot["checkpoint"],
+                    "requested_intent": snapshot["requested_intent"],
+                },
+                cast(int, entry["persisted_version"]),
+            )
+        except RuntimeError as exc:
+            raise SessionConflict("a newer session checkpoint already exists") from exc
+        entry["persisted_version"] = durable.version
+
+    def _accept_durable_command(
+        self,
+        session_id: str,
+        entry: dict[str, Any],
+        action: str,
+        payload: Mapping[str, Any],
+        actor: str,
+        idempotency_key: str,
+    ) -> bool:
+        if self._state_store is None:
+            return True
+        entry["request_sequence"] += 1
+        command = AcceptedCommand(
+            session_id=session_id,
+            command_id=f"{session_id}:request:{entry['request_sequence']}",
+            idempotency_key=idempotency_key,
+            actor=actor,
+            payload={"action": action, "payload": self._json_safe(dict(payload))},
+            accepted_at_utc=self._clock(),
+        )
+        try:
+            saved = self._state_store.record_accepted_command(command)
+        except RuntimeError as exc:
+            raise SessionConflict(str(exc)) from exc
+        return saved.command_id == command.command_id
 
     @staticmethod
     def _json_safe(value: Any) -> Any:
@@ -298,14 +409,33 @@ class InteractiveSimulationService:
         token: str | None,
         action: str,
         payload: Mapping[str, Any] | None = None,
+        *,
+        actor: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         payload = payload or {}
         with self._lock:
             entry = self._entry(session_id)
             self._authorize(entry, token)
             session: SimulationSession = entry["session"]
+            allowed_actions = {"pause", "resume", "reset", "terminate", "step", "advance"}
+            if action not in allowed_actions:
+                raise ValueError(f"unsupported action: {action}")
             if entry["terminated"] and action != "reset":
                 raise SessionConflict("simulation session is terminated")
+            if action == "advance" and session.paused:
+                raise SessionConflict("resume the session before advancing")
+            if self._state_store is not None:
+                if not actor or actor != entry["owner"]:
+                    raise SessionUnauthorized("the session owner identity is required")
+                if not idempotency_key:
+                    raise ValueError("Idempotency-Key is required for durable sessions")
+                assert token is not None
+                self._renew_durable_lease(session_id, entry, token)
+                if not self._accept_durable_command(
+                    session_id, entry, action, payload, actor, idempotency_key
+                ):
+                    return self.status(session_id)
             frame: SimulationFrame | None = None
             if action == "pause":
                 session.pause()
@@ -322,8 +452,6 @@ class InteractiveSimulationService:
                 session.pause()
                 entry["terminated"] = True
             elif action in {"step", "advance"}:
-                if action == "advance" and session.paused:
-                    raise SessionConflict("resume the session before advancing")
                 intent = self._intent(entry, session, payload.get("intent"))
                 try:
                     frame = session.step(intent)
@@ -339,11 +467,10 @@ class InteractiveSimulationService:
                             entry["policy_evaluations"].append(record)
                 except StopIteration:
                     frame = entry["last_frame"] or session.current
-            else:
-                raise ValueError(f"unsupported action: {action}")
             result = self.status(session_id)
             if frame is not None:
                 result["frame"] = self._frame_payload(frame)
+            self._persist_checkpoint(session_id, entry)
             return result
 
     def _intent(
