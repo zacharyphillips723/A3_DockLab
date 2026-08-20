@@ -1,1 +1,6 @@
 -e .[ui,storage,databricks]
+# Pin below Flask 3.1: its process_response reads ctx._session as a raw attribute,
+# which is unset under the Databricks Apps request path and 500s every response.
+# Listed here (not only in pyproject) so the Apps dependency cache is invalidated.
+flask<3.1
+werkzeug<3.1
