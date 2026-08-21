@@ -29,14 +29,18 @@ Databricks App uses for ownership, recovery, and command admission.
 - Engine checkpoints now use an explicit `1.0` JSON schema containing the
   deterministic state and complete intent sequence. JSON round-trip tests
   verify that replaying this payload produces the same subsequent frame.
+- A replacement application instance can restore a session after its lease
+  expires. Recovery verifies ownership, atomically claims a new lease and
+  token, rebuilds the configured policy runtime, replays the engine checkpoint,
+  and preserves paused/running/terminated lifecycle state.
+- Cross-instance tests prove that takeover is rejected before expiry, resumes
+  from the exact stored frame afterward, and invalidates the previous writer.
 
 ## Remaining integration slices
 
-1. Reconstruct a session from the versioned engine checkpoint after an App
-   restart, then test process-to-process takeover after lease expiry.
-2. Materialize telemetry, decisions, command history, and completed-run
+1. Materialize telemetry, decisions, command history, and completed-run
    manifests to Delta with operator and policy lineage.
-3. Connect MLflow policy identity/evaluation records and Databricks Jobs for
+2. Connect MLflow policy identity/evaluation records and Databricks Jobs for
    asynchronous evaluation and post-run materialization.
 
 The local in-memory execution path remains available so physics and UI work can

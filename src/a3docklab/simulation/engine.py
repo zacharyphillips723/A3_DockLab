@@ -1141,7 +1141,10 @@ class SimulationSession:
             raise ValueError("checkpoint does not contain a simulation frame")
         try:
             pd.testing.assert_series_equal(
-                pd.Series(frame.state), pd.Series(checkpoint.state), check_names=False
+                pd.Series(frame.state),
+                pd.Series(checkpoint.state),
+                check_names=False,
+                check_like=True,
             )
         except AssertionError as error:
             raise ValueError("checkpoint state does not match deterministic replay") from error

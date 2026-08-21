@@ -33,6 +33,10 @@ The repository is intentionally an engineering research simulator, not flight so
 - Anomaly-detection experiment plan
 - Dashboard and 3D visualization architecture
 - Verification and Monte Carlo strategy
+- Interactive human and policy-driven Live Lab sessions
+- Durable Lakebase session ownership, expiring leases, idempotent commands,
+  versioned engine checkpoints, and cross-instance restart recovery
+- Delta-backed replay and Databricks Asset Bundle deployment
 
 ## Quick start
 
@@ -60,14 +64,20 @@ Each run is written as a portable bundle containing `telemetry.csv`,
 hash, random seed, mission-source revision, and the complete assumption
 manifest used by the run.
 
-## Databricks integration boundary
+## Current architecture
 
-Simulation code writes through the `RunStorage` protocol. The included
-`LocalRunStorage` keeps local development simple; a later Databricks adapter can
-write the same telemetry and metadata contracts to Delta tables while MLflow
-tracks experiments. Lakebase should hold application-facing state such as run
-annotations and saved views, rather than becoming a dependency of the physics
-engine.
+The deterministic physics and safety core is portable Python and has no
+Databricks dependency. `InteractiveSimulationService` provides the live control
+boundary used by humans and policy adapters. It runs in memory locally and can
+optionally bind session ownership, leases, commands, and versioned recovery
+checkpoints to Lakebase. Local bundles or Delta tables provide replay data;
+MLflow records model identity and evaluation lineage; Databricks Jobs handle
+offline simulation, Monte Carlo, and materialization rather than the live
+control loop.
+
+See [`docs/current_architecture.md`](docs/current_architecture.md) for component
+boundaries, runtime flows, storage responsibilities, APIs, repository layout,
+deployment topology, and the documentation index.
 
 ## Deploying to Databricks
 
@@ -116,9 +126,21 @@ database is not registered as a Unity Catalog catalog. To add that registration
 (for querying Lakebase through the SQL Warehouse), define a `database_catalogs`
 resource; it requires `CREATE CATALOG` on the metastore.
 
-## Project document
+## Documentation
 
-See `docs/A3_DockLab_Project_Plan.md` for the full system design, equations, library choices, testing plan, implementation roadmap, and known risks.
+Start with:
+
+- [`docs/current_architecture.md`](docs/current_architecture.md) — current
+  implementation and navigation map
+- [`docs/interactive_docklab_milestones.md`](docs/interactive_docklab_milestones.md)
+  — approved interactive-product roadmap and acceptance gates
+- [`docs/A3_DockLab_Project_Plan.md`](docs/A3_DockLab_Project_Plan.md) — original
+  system design, equations, library choices, test plan, and risks
+- [`docs/milestone_5_control_plane.md`](docs/milestone_5_control_plane.md) —
+  current Lakebase control-plane implementation and remaining work
+- [`docs/databricks_bundle.md`](docs/databricks_bundle.md) and
+  [`docs/databricks_integration.md`](docs/databricks_integration.md) — workspace
+  deployment and platform integration
 
 Phase 3 architecture and operating details are documented in
 `docs/phase_3_telemetry_replay_plan.md`, with machine-readable Lakehouse and
@@ -128,31 +150,20 @@ The credibility-first physics work and interpretation limits are documented in
 
 ## Status
 
-Phases 1-3 now provide controlled rendezvous, synthetic telemetry, and mission replay.
-The current Physics Credibility increment adds tested LVLH/ECI frame transforms,
-numerical two-body propagation, quaternion attitude dynamics, explicit docking-port
-frames, terminal alignment safety, and a reproducible CW validity-envelope report. Both reference scenarios
-execute their authorized approach and hold-point sequence through soft capture.
-Deterministic closing-rate and corridor violations command braking or retreat
-aborts. Versioned multi-rate bundles preserve source and receive timestamps,
-fault labels, Parquet streams, and JSONL events for the Dash replay app and
-future Databricks adapters. Core Physics Credibility is complete and Phase B now
-includes its authority token, validated exchange, dual shadow commands, continuity
-monitoring, sustained selected-owner control, and rollback fault cases. Phase B
-is complete; Phase C now includes EKF estimation and reproducible local Monte
-Carlo risk analysis with structured fault sampling and estimator-consistency
-tails. Delta Lake storage/replay adapters now preserve the same contract for
-local and Databricks-backed replay. A Databricks bundle now packages the replay
-App, serverless simulation and Monte Carlo Jobs, MLflow experiment, and dev/prod
-targets. The App now queries Delta replay tables through its bound SQL warehouse
-using runtime OAuth and falls back to local bundles for development. Lakebase
-stores annotations, saved views, review state, and run comparisons. Optional
-orbital perturbations remain planned. All vehicle values are public-source estimates or explicit engineering
+Physics Credibility and Phases A-C are complete, including rendezvous/control,
+attitude and docking-port dynamics, controller handoff, EKF estimation, and
+reproducible Monte Carlo risk analysis. Interactive Milestones 1-4 are complete.
+Milestone 5 is in progress: Lakebase-backed ownership, expiring control leases,
+idempotent commands, optimistic concurrency, versioned engine checkpoints, and
+cross-instance restart recovery are implemented. Delta materialization and
+MLflow completion lineage remain before the Milestone 5 acceptance gate closes.
 
-Workspace releases use `databricks bundle run -t dev smoke` as the acceptance
-gate after deployment; it verifies Job execution, Delta replay, App health, and
-a Lakebase annotation round trip.
-placeholders.
+The DAB packages the Databricks App, Lakebase database, SQL warehouse binding,
+serverless simulation and Monte Carlo Jobs, MLflow experiment, and dev/prod
+targets. Workspace releases use `databricks bundle run -t dev smoke` as the
+post-deployment acceptance gate. All vehicle values are public-source estimates
+or explicit engineering placeholders. Optional orbital perturbations remain
+planned.
 
 ## License
 

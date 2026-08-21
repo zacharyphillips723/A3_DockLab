@@ -22,6 +22,7 @@ from a3docklab.simulation.commands import ControlIntent, DriverKind, IntentMode
 from a3docklab.simulation.engine import (
     SimulationFrame,
     SimulationSession,
+    deserialize_checkpoint,
     serialize_checkpoint,
 )
 from a3docklab.simulation.policies import (
@@ -216,6 +217,97 @@ class InteractiveSimulationService:
                 "policy_runtime": runtime.model_dump(mode="json"),
                 "policy_evaluations": [],
                 "persisted_version": persisted_version,
+                "model_uri": model_uri,
+                "model_version": model_version,
+                "code_revision": code_revision,
+            }
+        status = self.status(session_id)
+        status["control_token"] = token
+        return status
+
+    def restore(self, session_id: str, owner: str) -> dict[str, Any]:
+        """Take over an expired durable lease and rebuild its deterministic engine."""
+        if self._state_store is None:
+            raise SessionConflict("durable session recovery is unavailable")
+        durable = self._state_store.get_durable_session(session_id)
+        if durable is None:
+            raise SessionNotFound("simulation session not found")
+        if durable.owner != owner:
+            raise SessionUnauthorized("only the session owner can restore it")
+        metadata = durable.checkpoint or {}
+        engine_payload = metadata.get("engine_checkpoint")
+        if not isinstance(engine_payload, dict):
+            raise SessionConflict("the session does not have a restorable engine checkpoint")
+        if durable.scenario_id not in self.scenarios:
+            raise SessionNotFound(f"unknown scenario: {durable.scenario_id}")
+
+        token = self._token_factory()
+        now = self._clock()
+        try:
+            leased = self._state_store.acquire_session_lease(
+                session_id,
+                self._holder_id,
+                hash_lease_token(token),
+                now + self._lease_duration,
+                durable.version,
+                now,
+            )
+        except RuntimeError as exc:
+            raise SessionConflict("the existing control lease has not expired") from exc
+
+        fault = str(metadata.get("fault", "none"))
+        active_policy_id = metadata.get("active_policy_id")
+        shadow_policy_id = metadata.get("shadow_policy_id")
+        model_uri = metadata.get("model_uri")
+        model_version = str(metadata.get("model_version", "unknown"))
+        code_revision = str(metadata.get("code_revision", "unknown"))
+        runtime = PolicyRuntimeConfig.model_validate(metadata.get("policy_runtime", {}))
+        config = deepcopy(self.scenarios[durable.scenario_id])
+        config.handoff.injected_fault = fault  # type: ignore[assignment]
+        driver_id = f"human:{owner}:{session_id}"
+        session = SimulationSession(
+            config,
+            authorized_driver_id=driver_id,
+            active_policy=self._policy(
+                active_policy_id,
+                model_uri=model_uri,
+                model_version=model_version,
+                code_revision=code_revision,
+            ),
+            shadow_policy=self._policy(
+                shadow_policy_id,
+                model_uri=model_uri,
+                model_version=model_version,
+                code_revision=code_revision,
+            ),
+            active_policy_runtime=runtime,
+            shadow_policy_runtime=runtime,
+        )
+        restored_frame = session.restore(deserialize_checkpoint(engine_payload))
+        if durable.status == "running":
+            session.resume()
+        checkpoint = session.checkpoint()
+        with self._lock:
+            self._sessions[session_id] = {
+                "session": session,
+                "scenario_id": durable.scenario_id,
+                "owner": owner,
+                "token": token,
+                "driver_id": driver_id,
+                "terminated": durable.status == "terminated",
+                "command_sequence": sum(intent is not None for intent in checkpoint.intents),
+                "request_sequence": 0,
+                "requested_intent": metadata.get("requested_intent"),
+                "last_frame": restored_frame,
+                "fault": fault,
+                "active_policy_id": active_policy_id,
+                "shadow_policy_id": shadow_policy_id,
+                "policy_runtime": runtime.model_dump(mode="json"),
+                "policy_evaluations": [],
+                "persisted_version": leased.version,
+                "model_uri": model_uri,
+                "model_version": model_version,
+                "code_revision": code_revision,
             }
         status = self.status(session_id)
         status["control_token"] = token
@@ -267,6 +359,9 @@ class InteractiveSimulationService:
                     "active_policy_id": entry["active_policy_id"],
                     "shadow_policy_id": entry["shadow_policy_id"],
                     "policy_runtime": entry["policy_runtime"],
+                    "model_uri": entry["model_uri"],
+                    "model_version": entry["model_version"],
+                    "code_revision": entry["code_revision"],
                     "step_index": snapshot["step_index"],
                     "checkpoint": snapshot["checkpoint"],
                     "engine_checkpoint": engine_checkpoint,
@@ -289,10 +384,9 @@ class InteractiveSimulationService:
     ) -> bool:
         if self._state_store is None:
             return True
-        entry["request_sequence"] += 1
         command = AcceptedCommand(
             session_id=session_id,
-            command_id=f"{session_id}:request:{entry['request_sequence']}",
+            command_id=f"{session_id}:request:{uuid4()}",
             idempotency_key=idempotency_key,
             actor=actor,
             payload={"action": action, "payload": self._json_safe(dict(payload))},
