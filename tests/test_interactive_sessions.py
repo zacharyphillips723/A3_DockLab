@@ -26,7 +26,7 @@ def service() -> InteractiveSimulationService:
 
 
 def _durable_service(
-    tmp_path: Path, now: list[datetime]
+    tmp_path: Path, now: list[datetime], holder_id: str = "app-1"
 ) -> tuple[InteractiveSimulationService, ApplicationStateStore]:
     store = ApplicationStateStore(lambda: sqlite3.connect(tmp_path / "state.db"), "?")
     store.initialize()
@@ -34,11 +34,11 @@ def _durable_service(
     service = InteractiveSimulationService(
         {"blue_moon_side": load_config(path)},
         id_factory=lambda: "session-1",
-        token_factory=lambda: "lease-1",
+        token_factory=lambda: f"lease-{holder_id}",
         state_store=store,
         lease_duration=timedelta(seconds=30),
         clock=lambda: now[0],
-        holder_id="app-1",
+        holder_id=holder_id,
     )
     return service, store
 
@@ -192,6 +192,53 @@ def test_durable_control_api_requires_identity_and_idempotency_key(tmp_path: Pat
     )
     assert first.status_code == duplicate.status_code == 200
     assert first.json["step_index"] == duplicate.json["step_index"] == 0
+
+
+def test_expired_lease_takeover_restores_session_across_service_instances(
+    tmp_path: Path,
+) -> None:
+    now = [datetime.now(UTC)]
+    first_service, store = _durable_service(tmp_path, now, "app-1")
+    created = first_service.create("blue_moon_side", "pilot@example.com")
+    stepped = first_service.control(
+        "session-1",
+        created["control_token"],
+        "step",
+        {"intent": {"mode": "hold"}},
+        actor="pilot@example.com",
+        idempotency_key="first-step",
+    )
+    second_service, _ = _durable_service(tmp_path, now, "app-2")
+
+    with pytest.raises(SessionConflict, match="has not expired"):
+        second_service.restore("session-1", "pilot@example.com")
+    with pytest.raises(SessionUnauthorized, match="only the session owner"):
+        second_service.restore("session-1", "intruder@example.com")
+
+    now[0] += timedelta(seconds=31)
+    restored = second_service.restore("session-1", "pilot@example.com")
+    assert restored["step_index"] == stepped["step_index"] == 0
+    assert restored["frame"]["state"] == stepped["frame"]["state"]
+    assert restored["control_token"] != created["control_token"]
+    assert store.get_durable_session("session-1").lease_holder == "app-2"  # type: ignore[union-attr]
+
+    continued = second_service.control(
+        "session-1",
+        restored["control_token"],
+        "step",
+        {"intent": {"mode": "hold"}},
+        actor="pilot@example.com",
+        idempotency_key="continued-step",
+    )
+    assert continued["step_index"] == 1
+    with pytest.raises(SessionUnauthorized, match="expired or stale"):
+        first_service.control(
+            "session-1",
+            created["control_token"],
+            "step",
+            actor="pilot@example.com",
+            idempotency_key="old-instance",
+        )
 
 
 def test_live_api_round_trip_and_lease_enforcement(

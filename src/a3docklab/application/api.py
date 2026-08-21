@@ -100,6 +100,11 @@ def register_simulation_routes(server: Any, service: InteractiveSimulationServic
     def simulation_status(session_id: str) -> tuple[object, int]:
         return handle(lambda: service.status(session_id))
 
+    @server.post("/api/simulations/<session_id>/restore")  # type: ignore[untyped-decorator]
+    def restore_simulation(session_id: str) -> tuple[object, int]:
+        owner = request.headers.get("X-Forwarded-Email", "")
+        return handle(lambda: service.restore(session_id, owner))
+
     @server.get("/api/simulations/<session_id>/commands")  # type: ignore[untyped-decorator]
     def simulation_commands(session_id: str) -> tuple[object, int]:
         return handle(lambda: service.command_log(session_id))

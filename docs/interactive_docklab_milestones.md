@@ -141,9 +141,9 @@ reference autopilot.
 ## Milestone 5 — Databricks session control plane
 
 **Status:** In progress. Durable sessions are bound to the live runtime with
-owner authorization, lease renewal, optimistic concurrency, versioned
-checkpoints, and idempotent commands. Full engine reconstruction and
-Delta/MLflow materialization remain.
+owner authorization, lease renewal, optimistic concurrency, idempotent
+commands, and tested cross-instance reconstruction from versioned engine
+checkpoints. Delta/MLflow materialization remains.
 
 ### Goal
 
