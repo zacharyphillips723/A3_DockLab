@@ -14,6 +14,10 @@ from typing import Any, Protocol, cast
 
 import pandas as pd
 
+from a3docklab.application.materialization import (
+    CompletedSessionArtifact,
+    InteractiveSessionManifest,
+)
 from a3docklab.run_metadata import RunMetadata
 from a3docklab.telemetry.contracts import BundleManifest, StreamManifest
 from a3docklab.telemetry.generator import TelemetryStreams
@@ -260,6 +264,52 @@ class DeltaRunStorage:
             ),
         )
         return manifest
+
+
+class DeltaSessionMaterializer:
+    """Append a completed interactive session to normalized Lakehouse tables."""
+
+    def __init__(self, catalog: DeltaCatalog, table_prefix: str = "a3docklab") -> None:
+        self.catalog = catalog
+        self.table_prefix = table_prefix
+
+    def _table(self, suffix: str) -> str:
+        return f"{self.table_prefix}_interactive_{suffix}"
+
+    def materialize(self, artifact: CompletedSessionArtifact) -> InteractiveSessionManifest:
+        identity = {
+            "session_id": artifact.manifest.session_id,
+            "run_id": artifact.manifest.run_id,
+            "scenario_id": artifact.manifest.scenario_id,
+            "owner": artifact.manifest.owner,
+        }
+        frames = {
+            "telemetry": artifact.telemetry,
+            "events": artifact.events,
+            "decisions": artifact.decisions,
+            "commands": artifact.commands,
+            "policy_evaluations": artifact.policy_evaluations,
+        }
+        for name, source in frames.items():
+            if source.empty:
+                continue
+            frame = source.copy()
+            for column, value in identity.items():
+                frame[column] = value
+            frame = frame[[*identity, *[column for column in frame if column not in identity]]]
+            self.catalog.append_table(self._table(name), frame)
+        self.catalog.append_table(
+            self._table("sessions"),
+            pd.DataFrame(
+                [
+                    {
+                        **artifact.manifest.model_dump(mode="json"),
+                        "manifest_json": artifact.manifest.model_dump_json(),
+                    }
+                ]
+            ),
+        )
+        return artifact.manifest
 
 
 class DeltaReplayStore:

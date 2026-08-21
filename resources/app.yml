@@ -17,6 +17,10 @@ resources:
             value: ${var.warehouse_id}
           - name: A3DOCKLAB_BUNDLE_ROOT
             value: /tmp/a3docklab/bundles
+          - name: A3DOCKLAB_SESSION_ARTIFACT_ROOT
+            value: /Volumes/${var.catalog}/${var.schema}/${var.session_artifact_volume}
+          - name: A3DOCKLAB_SESSION_MATERIALIZATION_JOB_ID
+            value: ${resources.jobs.session_materialization.id}
       resources:
         - name: application_state
           database:
@@ -34,6 +38,10 @@ resources:
         - name: monte_carlo_job
           job:
             id: ${resources.jobs.monte_carlo.id}
+            permission: CAN_MANAGE_RUN
+        - name: session_materialization_job
+          job:
+            id: ${resources.jobs.session_materialization.id}
             permission: CAN_MANAGE_RUN
         - name: experiment
           experiment:

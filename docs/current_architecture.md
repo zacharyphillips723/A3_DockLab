@@ -65,8 +65,10 @@ instance then fails its version/token check.
 | Databricks Jobs | offline simulation, Monte Carlo, evaluation, post-run materialization | live frame-by-frame control |
 | Local bundles | portable offline telemetry/events/metadata and replay development | shared mutable state |
 
-Delta materialization of completed interactive sessions and final MLflow lineage
-are the remaining Milestone 5 platform slices.
+Completed interactive sessions are staged through one portable artifact
+contract. In Databricks the App writes that contract to a managed Volume and
+launches a serverless publication Job, which appends normalized Delta tables
+and records MLflow lineage outside the live control loop.
 
 ## Application and API surface
 
@@ -81,8 +83,10 @@ are the remaining Milestone 5 platform slices.
 - `GET /api/simulations/{session_id}/commands`
 - `GET /api/simulations/{session_id}/policy-evaluations`
 
-Durable control requests require Databricks-provided operator identity, a bearer
-lease token, and an `Idempotency-Key` header.
+Durable control requests require Databricks-provided operator identity, an
+`X-A3DockLab-Control-Token`, and an `Idempotency-Key` header. Keeping live
+authority out of `Authorization` preserves workspace OAuth for non-browser API
+clients.
 
 ## Repository map
 
@@ -102,15 +106,15 @@ lease token, and an `Idempotency-Key` header.
 ## Databricks deployment
 
 The repository is a Databricks Asset Bundle. It provisions/binds the App,
-Lakebase database, SQL warehouse access, simulation and Monte Carlo Jobs, MLflow
-experiment, and dev/prod targets. The App uses runtime OAuth for Databricks SQL
-and Lakebase credentials. The local bundle and in-memory paths remain supported
-for offline development.
+Lakebase database, managed artifact Volume, SQL warehouse access, simulation,
+Monte Carlo, and session-materialization Jobs, MLflow experiment, and dev/prod
+targets. The App uses runtime OAuth for Databricks SQL and Lakebase credentials.
+The local bundle and in-memory paths remain supported for offline development.
 
 See `docs/databricks_bundle.md` for deployment steps and
 `docs/databricks_integration.md` for platform boundaries. The workspace smoke
-job verifies Job execution, Delta replay, App health, and a Lakebase annotation
-round trip.
+job verifies Job execution, Delta replay, App health, a Lakebase annotation
+round trip, and terminal interactive-session publication to Delta.
 
 ## Documentation index
 

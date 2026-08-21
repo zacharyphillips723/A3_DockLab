@@ -36,12 +36,32 @@ Databricks App uses for ownership, recovery, and command admission.
 - Cross-instance tests prove that takeover is rejected before expiry, resumes
   from the exact stored frame afterward, and invalidates the previous writer.
 
-## Remaining integration slices
+## Completed-session publication
 
-1. Materialize telemetry, decisions, command history, and completed-run
-   manifests to Delta with operator and policy lineage.
-2. Connect MLflow policy identity/evaluation records and Databricks Jobs for
-   asynchronous evaluation and post-run materialization.
+- Terminal sessions normalize telemetry, events, decisions, commands, policy
+  evaluations, and an attributed `1.0` manifest through one portable contract.
+- Local development writes the contract as CSV/JSON. The Databricks App writes
+  the same files to a managed Unity Catalog Volume and asynchronously launches
+  the `session_materialization` Job.
+- The Job appends normalized `a3docklab_interactive_*` Delta tables and logs
+  owner, scenario, active/shadow policy, model URI/version, code revision,
+  runtime configuration, and row-count metrics to MLflow.
+- The grant workflow creates the managed Volume idempotently and grants the App
+  service principal read/write access. The App uses a dedicated control-token
+  header so workspace OAuth and live authority can coexist.
+- The deployment smoke gate terminates a live session and waits for its
+  attributed Delta manifest before accepting the release.
+
+## Acceptance evidence
+
+- restart tests reproduce the stored frame across independent service
+  instances and invalidate the expired writer;
+- lease, identity, optimistic-concurrency, and idempotency tests fail closed;
+- local and Delta materializers pass the same artifact-contract tests;
+- terminal materialization is idempotent within the live service;
+- the DAB packages the App, Lakebase, managed-Volume grant workflow, Spark
+  publication Job, SQL access, and MLflow experiment;
+- `databricks bundle run -t dev smoke` is the workspace acceptance gate.
 
 The local in-memory execution path remains available so physics and UI work can
 be developed without a Databricks workspace.

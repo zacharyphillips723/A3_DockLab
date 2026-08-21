@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import time
+import uuid
 from typing import Any
 
 import requests
@@ -12,6 +14,7 @@ from a3docklab.platform.delta import (
     DatabricksSqlExecutor,
     DeltaReplayStore,
     SqlWarehouseDeltaCatalog,
+    TableFilter,
 )
 
 
@@ -82,9 +85,60 @@ def main() -> None:
     annotation_id = created.json()["annotation_id"]
     if annotation_id not in {item["annotation_id"] for item in listed.json()}:
         raise RuntimeError("Lakebase annotation round trip failed")
+
+    live = requests.post(
+        f"{app_url}/api/simulations",
+        headers=headers,
+        json={"scenario_id": "blue_moon_side"},
+        timeout=30,
+    )
+    live.raise_for_status()
+    session_id = live.json()["session_id"]
+    control_headers = {
+        **headers,
+        "X-A3DockLab-Control-Token": live.json()["control_token"],
+        "Idempotency-Key": str(uuid.uuid4()),
+    }
+    stepped = requests.post(
+        f"{app_url}/api/simulations/{session_id}/control",
+        headers=control_headers,
+        json={"action": "step"},
+        timeout=30,
+    )
+    stepped.raise_for_status()
+    control_headers["Idempotency-Key"] = str(uuid.uuid4())
+    terminated = requests.post(
+        f"{app_url}/api/simulations/{session_id}/control",
+        headers=control_headers,
+        json={"action": "terminate"},
+        timeout=30,
+    )
+    terminated.raise_for_status()
+    if terminated.json().get("materialization", {}).get("session_id") != session_id:
+        raise RuntimeError("Terminal session did not enqueue materialization")
+
+    catalog = SqlWarehouseDeltaCatalog(
+        DatabricksSqlExecutor(workspace.config.host, arguments.warehouse_id)
+    )
+    deadline = time.monotonic() + 180
+    materialized = False
+    while time.monotonic() < deadline:
+        try:
+            rows = catalog.read_table(
+                f"{arguments.catalog}.{arguments.schema}.a3docklab_interactive_sessions",
+                filters=(TableFilter("session_id", "eq", session_id),),
+            )
+            materialized = not rows.empty
+        except Exception:  # noqa: BLE001 - table may not exist until the async Job starts
+            materialized = False
+        if materialized:
+            break
+        time.sleep(5)
+    if not materialized:
+        raise RuntimeError(f"Interactive session {session_id} was not materialized to Delta")
     print(
         f"Smoke test passed: run={run_id}, truth_rows={len(truth)}, "
-        f"annotation={annotation_id}, app={app_url}"
+        f"annotation={annotation_id}, session={session_id}, app={app_url}"
     )
 
 
