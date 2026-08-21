@@ -24,6 +24,9 @@ variables:
     default: a3docklab
   warehouse_id:
     description: SQL warehouse ID exposed to the Databricks App.
+  session_artifact_volume:
+    description: Managed Unity Catalog Volume for completed-session handoff artifacts.
+    default: a3docklab_session_artifacts
 
 scripts:
   # Break the fresh-workspace dependency cycle: first deploy only the Lakebase
@@ -49,6 +52,7 @@ scripts:
       A3_APP_NAME: ${bundle.name}-${bundle.target}
       A3_DB_INSTANCE: ${bundle.name}-${bundle.target}
       A3_DB_NAME: a3docklab
+      A3_ARTIFACT_VOLUME: ${var.session_artifact_volume}
     content: >-
       uv run --extra databricks python databricks/grant_access.py
       --catalog "$A3_CATALOG"
@@ -56,6 +60,7 @@ scripts:
       --app-name "$A3_APP_NAME"
       --database-instance-name "$A3_DB_INSTANCE"
       --database-name "$A3_DB_NAME"
+      --artifact-volume-name "$A3_ARTIFACT_VOLUME"
 
   smoke:
     env:

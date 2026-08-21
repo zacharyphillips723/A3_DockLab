@@ -82,6 +82,48 @@ resources:
             dependencies:
               - ${workspace.file_path}
 
+    session_materialization:
+      name: a3-docklab-session-materialization-${bundle.target}
+      max_concurrent_runs: 4
+      parameters:
+        - name: session_id
+          default: required-session-id
+        - name: artifact_root
+          default: /Volumes/${var.catalog}/${var.schema}/${var.session_artifact_volume}
+      tasks:
+        - task_key: setup_lakehouse
+          spark_python_task:
+            python_file: ../databricks/jobs/setup_lakehouse.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+          environment_key: default
+        - task_key: materialize_session
+          depends_on:
+            - task_key: setup_lakehouse
+          spark_python_task:
+            python_file: ../databricks/jobs/materialize_session.py
+            parameters:
+              - --session-id
+              - "{{job.parameters.session_id}}"
+              - --artifact-root
+              - "{{job.parameters.artifact_root}}"
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --experiment
+              - ${resources.experiments.a3docklab.name}
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - ${workspace.file_path}
+
   experiments:
     a3docklab:
       name: ${workspace.root_path}/experiments/a3docklab

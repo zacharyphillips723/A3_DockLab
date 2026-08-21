@@ -11,7 +11,7 @@
 
   async function api(path, options) {
     const headers = {"Content-Type": "application/json", ...(options.headers || {})};
-    if (live.token) headers.Authorization = `Bearer ${live.token}`;
+    if (live.token) headers["X-A3DockLab-Control-Token"] = live.token;
     const response = await fetch(path, {...options, headers});
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);

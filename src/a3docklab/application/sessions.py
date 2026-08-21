@@ -11,6 +11,11 @@ from threading import RLock
 from typing import Any, cast
 from uuid import uuid4
 
+from a3docklab.application.materialization import (
+    InteractiveSessionManifest,
+    SessionMaterializer,
+    build_completed_session_artifact,
+)
 from a3docklab.application.state import (
     AcceptedCommand,
     ApplicationStateStore,
@@ -78,6 +83,7 @@ class InteractiveSimulationService:
         lease_duration: timedelta = timedelta(seconds=30),
         clock: Callable[[], datetime] | None = None,
         holder_id: str | None = None,
+        materializer: SessionMaterializer | None = None,
     ) -> None:
         self.scenarios = dict(scenarios)
         self._id_factory = id_factory or (lambda: str(uuid4()))
@@ -86,6 +92,7 @@ class InteractiveSimulationService:
         self._lease_duration = lease_duration
         self._clock = clock or (lambda: datetime.now(UTC))
         self._holder_id = holder_id or f"app:{uuid4()}"
+        self._materializer = materializer
         self._sessions: dict[str, dict[str, Any]] = {}
         self._lock = RLock()
 
@@ -220,6 +227,7 @@ class InteractiveSimulationService:
                 "model_uri": model_uri,
                 "model_version": model_version,
                 "code_revision": code_revision,
+                "materialized_manifest": None,
             }
         status = self.status(session_id)
         status["control_token"] = token
@@ -308,6 +316,7 @@ class InteractiveSimulationService:
                 "model_uri": model_uri,
                 "model_version": model_version,
                 "code_revision": code_revision,
+                "materialized_manifest": metadata.get("materialized_manifest"),
             }
         status = self.status(session_id)
         status["control_token"] = token
@@ -362,6 +371,7 @@ class InteractiveSimulationService:
                     "model_uri": entry["model_uri"],
                     "model_version": entry["model_version"],
                     "code_revision": entry["code_revision"],
+                    "materialized_manifest": entry["materialized_manifest"],
                     "step_index": snapshot["step_index"],
                     "checkpoint": snapshot["checkpoint"],
                     "engine_checkpoint": engine_checkpoint,
@@ -506,6 +516,39 @@ class InteractiveSimulationService:
                 "evaluations": deepcopy(entry["policy_evaluations"]),
             }
 
+    def materialize(self, session_id: str) -> InteractiveSessionManifest:
+        """Publish one terminal session through the configured platform boundary."""
+        if self._materializer is None:
+            raise SessionConflict("session materialization is unavailable")
+        with self._lock:
+            entry = self._entry(session_id)
+            existing = entry["materialized_manifest"]
+            if existing is not None:
+                return InteractiveSessionManifest.model_validate(existing)
+            snapshot = self.status(session_id)
+            lifecycle = snapshot["lifecycle"]
+            if lifecycle not in {"complete", "terminated"}:
+                raise SessionConflict("only terminal sessions can be materialized")
+            artifact = build_completed_session_artifact(
+                entry["session"],
+                session_id=session_id,
+                scenario_id=entry["scenario_id"],
+                owner=entry["owner"],
+                lifecycle=lifecycle,
+                completed_at_utc=self._clock(),
+                policy_evaluations=entry["policy_evaluations"],
+                active_policy_id=entry["active_policy_id"],
+                shadow_policy_id=entry["shadow_policy_id"],
+                model_uri=entry["model_uri"],
+                model_version=entry["model_version"],
+                code_revision=entry["code_revision"],
+                policy_runtime=entry["policy_runtime"],
+            )
+            manifest = self._materializer.materialize(artifact)
+            entry["materialized_manifest"] = manifest.model_dump(mode="json")
+            self._persist_checkpoint(session_id, entry)
+            return manifest
+
     def control(
         self,
         session_id: str,
@@ -551,6 +594,7 @@ class InteractiveSimulationService:
                 entry["requested_intent"] = None
                 entry["last_frame"] = None
                 entry["policy_evaluations"] = []
+                entry["materialized_manifest"] = None
             elif action == "terminate":
                 session.pause()
                 entry["terminated"] = True
@@ -574,6 +618,8 @@ class InteractiveSimulationService:
             if frame is not None:
                 result["frame"] = self._frame_payload(frame)
             self._persist_checkpoint(session_id, entry)
+            if result["lifecycle"] in {"complete", "terminated"} and self._materializer:
+                result["materialization"] = self.materialize(session_id).model_dump(mode="json")
             return result
 
     def _intent(

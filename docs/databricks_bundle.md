@@ -1,9 +1,9 @@
 # Databricks Bundle Deployment
 
 A3 DockLab is packaged as a Databricks Declarative Automation Bundle. The
-bundle deploys a Databricks App, simulation and Monte Carlo Jobs, and an MLflow
-experiment while keeping workspace identity and infrastructure values outside
-source control.
+bundle deploys a Databricks App, simulation, Monte Carlo, and completed-session
+materialization Jobs, and an MLflow experiment while keeping workspace identity
+and infrastructure values outside source control.
 
 ## Resources
 
@@ -13,6 +13,11 @@ source control.
   generates Phase 3 streams, and appends them to normalized Delta tables.
 - `monte_carlo`: serverless Python task that writes ensemble/convergence/risk
   tables and logs aggregate metrics to MLflow.
+- `session_materialization`: serverless task that reads a terminal-session
+  artifact from the managed Volume, writes normalized Delta audit tables, and
+  logs operator/policy lineage to MLflow.
+- `a3docklab_session_artifacts`: managed Unity Catalog Volume created by the
+  idempotent grant workflow for App-to-Job handoff.
 - `a3docklab`: MLflow experiment scoped beneath the target workspace root.
 - `app_state`: Lakebase database instance/catalog for annotations, saved views,
   per-user review status, and saved run comparisons.
@@ -54,10 +59,11 @@ databricks bundle run -t dev smoke \
 
 The smoke script runs the Blue Moon simulation Job, verifies the resulting run
 and truth samples through SQL Warehouse replay, checks App/Lakebase health,
-creates an annotation through the authenticated App API, and reads it back.
+creates an annotation through the authenticated App API, and reads it back. It
+also creates and terminates a live session, then waits for its Delta manifest.
 Deployment is accepted only when the entire sequence succeeds.
 
-Both compute Jobs begin with an idempotent `CREATE SCHEMA IF NOT EXISTS` task.
+All publication Jobs begin with an idempotent `CREATE SCHEMA IF NOT EXISTS` task.
 The development schema is the identifier-safe `a3docklab_dev`; teams sharing a
 workspace should override `schema` to isolate deployments.
 
@@ -69,9 +75,11 @@ URLs, warehouse IDs, and service-principal identifiers must not be committed.
 
 Jobs publish directly through the injected Spark/Delta catalog. The App receives
 catalog, schema, and warehouse identifiers plus resource bindings for the SQL
-warehouse, both Jobs, and MLflow. In Databricks it uses OAuth-backed,
+warehouse, all Jobs, and MLflow. In Databricks it uses OAuth-backed,
 parameterized SQL Warehouse queries against the same Delta replay contract; in
 local development it falls back to filesystem bundles. Lakebase-backed mutable
 review state is provided through a PostgreSQL-compatible application service;
 the App initializes its tables through the bound database resource using
 runtime OAuth. The telemetry and mutable-state stores remain separate by design.
+Terminal live sessions are staged to a managed Volume and published
+asynchronously, keeping Spark and MLflow work outside the control request.

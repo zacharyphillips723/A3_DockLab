@@ -53,6 +53,9 @@ def register_simulation_routes(server: Any, service: InteractiveSimulationServic
     """Register the browser/model-neutral live simulation API."""
 
     def token() -> str | None:
+        control_token = request.headers.get("X-A3DockLab-Control-Token")
+        if control_token:
+            return control_token
         value = request.headers.get("Authorization", "")
         return value[7:] if value.startswith("Bearer ") else None
 

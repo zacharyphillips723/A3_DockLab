@@ -25,7 +25,12 @@ import argparse
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import DatabricksError
-from databricks.sdk.service.catalog import PermissionsChange, Privilege, SecurableType
+from databricks.sdk.service.catalog import (
+    PermissionsChange,
+    Privilege,
+    SecurableType,
+    VolumeType,
+)
 
 
 def _ensure_schema(workspace: WorkspaceClient, catalog: str, schema: str) -> None:
@@ -39,7 +44,11 @@ def _ensure_schema(workspace: WorkspaceClient, catalog: str, schema: str) -> Non
 
 
 def _grant_unity_catalog(
-    workspace: WorkspaceClient, catalog: str, schema: str, principal: str
+    workspace: WorkspaceClient,
+    catalog: str,
+    schema: str,
+    principal: str,
+    artifact_volume_name: str,
 ) -> None:
     workspace.grants.update(
         SecurableType.CATALOG.value,
@@ -50,12 +59,32 @@ def _grant_unity_catalog(
         SecurableType.SCHEMA.value,
         f"{catalog}.{schema}",
         changes=[
+            PermissionsChange(principal=principal, add=[Privilege.USE_SCHEMA, Privilege.SELECT])
+        ],
+    )
+    try:
+        workspace.volumes.create(
+            catalog_name=catalog,
+            schema_name=schema,
+            name=artifact_volume_name,
+            volume_type=VolumeType.MANAGED,
+        )
+        print(f"Created managed Volume {catalog}.{schema}.{artifact_volume_name}")
+    except DatabricksError as error:
+        if "already exists" not in str(error).lower():
+            raise
+        print(f"Volume {catalog}.{schema}.{artifact_volume_name} already exists")
+    workspace.grants.update(
+        SecurableType.VOLUME.value,
+        f"{catalog}.{schema}.{artifact_volume_name}",
+        changes=[
             PermissionsChange(
-                principal=principal, add=[Privilege.USE_SCHEMA, Privilege.SELECT]
+                principal=principal,
+                add=[Privilege.READ_VOLUME, Privilege.WRITE_VOLUME],
             )
         ],
     )
-    print(f"Granted USE CATALOG + USE SCHEMA/SELECT to {principal}")
+    print(f"Granted UC read/write and schema query access to {principal}")
 
 
 def _provision_lakebase(
@@ -68,9 +97,7 @@ def _provision_lakebase(
     from psycopg import sql
 
     instance = workspace.database.get_database_instance(instance_name)
-    credential = workspace.database.generate_database_credential(
-        instance_names=[instance_name]
-    )
+    credential = workspace.database.generate_database_credential(instance_names=[instance_name])
     user = workspace.current_user.me().user_name
     connection_kwargs = {
         "host": instance.read_write_dns,
@@ -81,14 +108,14 @@ def _provision_lakebase(
     }
 
     # CREATE DATABASE cannot run inside a transaction; use autocommit.
-    with psycopg.connect(dbname="databricks_postgres", autocommit=True, **connection_kwargs) as admin:
+    with psycopg.connect(
+        dbname="databricks_postgres", autocommit=True, **connection_kwargs
+    ) as admin:
         exists = admin.execute(
             "SELECT 1 FROM pg_database WHERE datname = %s", (database_name,)
         ).fetchone()
         if not exists:
-            admin.execute(
-                sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name))
-            )
+            admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name)))
             print(f"Created Lakebase database {database_name!r}")
         else:
             print(f"Lakebase database {database_name!r} already exists")
@@ -98,9 +125,7 @@ def _provision_lakebase(
 
     with psycopg.connect(dbname=database_name, **connection_kwargs) as database:
         database.execute(
-            sql.SQL("GRANT USAGE, CREATE ON SCHEMA public TO {}").format(
-                sql.Identifier(principal)
-            )
+            sql.SQL("GRANT USAGE, CREATE ON SCHEMA public TO {}").format(sql.Identifier(principal))
         )
         database.commit()
     print(f"Granted USAGE, CREATE ON SCHEMA public to {principal}")
@@ -113,18 +138,25 @@ def main() -> None:
     parser.add_argument("--app-name")
     parser.add_argument("--database-instance-name", required=True)
     parser.add_argument("--database-name", required=True)
+    parser.add_argument("--artifact-volume-name")
     parser.add_argument("--bootstrap-only", action="store_true")
     arguments = parser.parse_args()
 
     workspace = WorkspaceClient()
     if arguments.bootstrap_only:
-        _provision_lakebase(
-            workspace, arguments.database_instance_name, arguments.database_name
-        )
+        _provision_lakebase(workspace, arguments.database_instance_name, arguments.database_name)
         return
 
-    if not arguments.catalog or not arguments.schema or not arguments.app_name:
-        parser.error("--catalog, --schema, and --app-name are required unless --bootstrap-only")
+    if (
+        not arguments.catalog
+        or not arguments.schema
+        or not arguments.app_name
+        or not arguments.artifact_volume_name
+    ):
+        parser.error(
+            "--catalog, --schema, --app-name, and --artifact-volume-name are required "
+            "unless --bootstrap-only"
+        )
     app = workspace.apps.get(arguments.app_name)
     principal = app.service_principal_client_id
     if not principal:
@@ -134,7 +166,13 @@ def main() -> None:
         )
 
     _ensure_schema(workspace, arguments.catalog, arguments.schema)
-    _grant_unity_catalog(workspace, arguments.catalog, arguments.schema, principal)
+    _grant_unity_catalog(
+        workspace,
+        arguments.catalog,
+        arguments.schema,
+        principal,
+        arguments.artifact_volume_name,
+    )
     _provision_lakebase(
         workspace, arguments.database_instance_name, arguments.database_name, principal
     )

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from a3docklab.application.api import register_simulation_routes, register_state_routes
+from a3docklab.application.materialization import QueuedSessionMaterializer
 from a3docklab.application.sessions import InteractiveSimulationService
 from a3docklab.application.state import ApplicationStateStore, PostgresConnectionFactory
 from a3docklab.config import load_config
@@ -14,6 +15,7 @@ from a3docklab.platform.delta import (
     DeltaReplayStore,
     SqlWarehouseDeltaCatalog,
 )
+from a3docklab.platform.jobs import DatabricksSessionMaterializationLauncher
 from a3docklab.visualization.dashboard import create_app
 from a3docklab.visualization.replay import LocalReplayStore
 
@@ -39,9 +41,20 @@ def application_state_store() -> ApplicationStateStore | None:
 
 scenario_root = Path(__file__).parent / "configs" / "scenarios"
 state_store = application_state_store()
+artifact_root = os.getenv("A3DOCKLAB_SESSION_ARTIFACT_ROOT")
+materialization_job_id = os.getenv("A3DOCKLAB_SESSION_MATERIALIZATION_JOB_ID")
+session_materializer = (
+    QueuedSessionMaterializer(
+        artifact_root,
+        DatabricksSessionMaterializationLauncher(materialization_job_id),
+    )
+    if artifact_root and materialization_job_id
+    else None
+)
 simulation_service = InteractiveSimulationService(
     {path.stem: load_config(path) for path in sorted(scenario_root.glob("*.yaml"))},
     state_store=state_store,
+    materializer=session_materializer,
 )
 app = create_app(replay_store(), simulation_service.list_scenarios())
 server = app.server

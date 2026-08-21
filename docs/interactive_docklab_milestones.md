@@ -140,10 +140,11 @@ reference autopilot.
 
 ## Milestone 5 — Databricks session control plane
 
-**Status:** In progress. Durable sessions are bound to the live runtime with
-owner authorization, lease renewal, optimistic concurrency, idempotent
-commands, and tested cross-instance reconstruction from versioned engine
-checkpoints. Delta/MLflow materialization remains.
+**Status:** Complete. Durable sessions are bound to the live runtime with owner
+authorization, lease renewal, optimistic concurrency, idempotent commands, and
+tested cross-instance reconstruction. Terminal sessions stage one portable
+contract in a managed Volume, enqueue a Databricks Job, publish attributed
+telemetry/audit tables to Delta, and record policy lineage in MLflow.
 
 ### Goal
 
