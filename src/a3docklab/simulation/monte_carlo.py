@@ -256,9 +256,12 @@ def run_ensemble(
         result = run_controlled(scenario)
         summary = summarize(result)
         telemetry = result.telemetry
+        capture_rows = telemetry.loc[telemetry["capture_latched"]]
+        contact = capture_rows.iloc[0] if not capture_rows.empty else None
         row: dict[str, object] = {str(key): value for key, value in sample.to_dict().items()}
         row.update(
             {
+                "run_id": str(telemetry["run_id"].iat[0]),
                 "scenario": base.name,
                 "terminal_phase": summary.terminal_phase,
                 "capture_success": summary.terminal_phase == "complete",
@@ -266,6 +269,18 @@ def run_ensemble(
                 "elapsed_time_s": summary.elapsed_time_s,
                 "propellant_used_kg": summary.propellant_used_kg,
                 "closest_approach_m": summary.closest_approach_m,
+                "contact_closing_rate_m_s": (
+                    float(contact["closing_rate_m_s"]) if contact is not None else np.nan
+                ),
+                "contact_lateral_offset_m": (
+                    float(contact["port_lateral_offset_m"]) if contact is not None else np.nan
+                ),
+                "contact_angular_error_deg": (
+                    float(contact["port_angular_error_deg"]) if contact is not None else np.nan
+                ),
+                "capture_dissipated_energy_j": (
+                    float(contact["capture_dissipated_energy_j"]) if contact is not None else np.nan
+                ),
                 "warning_count": summary.warning_count,
                 "maximum_lateral_offset_m": float(telemetry["port_lateral_offset_m"].max()),
                 "maximum_angular_error_deg": float(telemetry["port_angular_error_deg"].max()),
@@ -348,6 +363,11 @@ def run_ensemble(
         "execution_backend": "local",
         "partition_count": 1,
         "sample_seed_strategy": "numpy_seed_sequence_spawn",
+        "ensemble_config": config_payload,
+        "base_configuration": base.model_dump(mode="json"),
+        "telemetry_configuration": (
+            telemetry_config.model_dump(mode="json") if telemetry_config is not None else None
+        ),
     }
     return EnsembleResult(manifest, runs, convergence, risk_summary)
 

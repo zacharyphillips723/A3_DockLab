@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, quote
 
 import numpy as np
 import pandas as pd
 
+from a3docklab.analysis.contracts import AnalysisBudget
+from a3docklab.analysis.risk import RiskQueryResult, RiskSampleMaterializer, RiskStore
 from a3docklab.telemetry.contracts import BundleManifest
 from a3docklab.visualization.replay import ReplayStore
 
@@ -304,7 +307,122 @@ def _health_figure(go: Any, payload: dict[str, Any]) -> Any:
     return figure
 
 
-def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None = None) -> Any:
+def _risk_figures(go: Any, result: RiskQueryResult, point_budget: int) -> tuple[Any, Any, Any]:
+    runs = result.runs
+    distributions = go.Figure()
+    distributions.add_trace(go.Histogram(x=runs["closest_approach_m"], name="Closest approach (m)", opacity=0.72))
+    distributions.add_trace(go.Histogram(x=runs["propellant_used_kg"], name="Propellant used (kg)", opacity=0.72))
+    distributions.update_layout(template="plotly_dark", barmode="overlay", title="Outcome distributions", uirevision=f"risk-distributions-{result.ensemble.ensemble_id}")
+
+    convergence = result.convergence
+    if len(convergence) > point_budget:
+        convergence = convergence.iloc[np.unique(np.linspace(0, len(convergence) - 1, point_budget, dtype=int))]
+    convergence_figure = go.Figure()
+    convergence_figure.add_trace(go.Scatter(x=convergence["sample_count"], y=convergence["capture_rate"], name="Capture rate"))
+    convergence_figure.add_trace(go.Scatter(x=convergence["sample_count"], y=convergence["abort_rate"], name="Abort rate"))
+    convergence_figure.update_layout(template="plotly_dark", title="Monte Carlo convergence", yaxis_tickformat=".0%", uirevision=f"risk-convergence-{result.ensemble.ensemble_id}")
+
+    sensitivity = result.sensitivity.head(12).sort_values("importance")
+    sensitivity_figure = go.Figure(go.Bar(x=sensitivity["importance"], y=sensitivity["parameter"], orientation="h"))
+    sensitivity_figure.update_layout(template="plotly_dark", title="Input sensitivity (screening correlation)", xaxis_title="Absolute correlation", margin={"l": 190}, uirevision=f"risk-sensitivity-{result.ensemble.ensemble_id}")
+    return distributions, convergence_figure, sensitivity_figure
+
+
+def _risk_detail_figures(go: Any, result: RiskQueryResult) -> tuple[Any, Any]:
+    runs = result.runs
+    contact = go.Figure()
+    metrics = (
+        ("contact_closing_rate_m_s", "Closing rate (m/s)"),
+        ("contact_lateral_offset_m", "Lateral offset (m)"),
+        ("contact_angular_error_deg", "Angular error (deg)"),
+    )
+    for column, label in metrics:
+        if column in runs and runs[column].notna().any():
+            contact.add_trace(go.Box(y=runs[column].dropna(), name=label, boxpoints="outliers"))
+    if not contact.data:
+        contact.add_annotation(text="Contact metrics are unavailable in this older ensemble", showarrow=False)
+    contact.update_layout(
+        template="plotly_dark", title="Contact conditions",
+        uirevision=f"risk-contact-{result.ensemble.ensemble_id}",
+    )
+
+    faults = result.fault_sensitivity.sort_values("abort_rate")
+    fault_figure = go.Figure()
+    fault_figure.add_trace(
+        go.Bar(
+            x=faults["abort_rate"], y=faults["fault"], orientation="h",
+            customdata=np.column_stack((faults["run_count"], faults["capture_rate"])),
+            hovertemplate="abort %{x:.1%}<br>capture %{customdata[1]:.1%}<br>runs %{customdata[0]}<extra></extra>",
+        )
+    )
+    fault_figure.update_layout(
+        template="plotly_dark", title="Outcome by sampled fault", xaxis_tickformat=".0%",
+        uirevision=f"risk-faults-{result.ensemble.ensemble_id}",
+    )
+    return contact, fault_figure
+
+
+def _outlier_table(
+    html: Any,
+    result: RiskQueryResult,
+    replay_run_ids: set[str],
+    can_materialize: bool,
+) -> Any:
+    runs = result.runs.copy()
+    runs["risk_rank"] = (
+        runs["closest_approach_m"].rank(pct=True)
+        + runs["propellant_used_kg"].rank(pct=True)
+        + runs["abort"].astype(float)
+    )
+    outliers = runs.nlargest(min(10, len(runs)), "risk_rank")
+    headers = ("Sample", "Outcome", "Closest approach", "Propellant", "Replay")
+    body = []
+    for _, row in outliers.iterrows():
+        run_id = str(row.get("run_id", ""))
+        if run_id in replay_run_ids:
+            replay = html.A("Open replay", href=f"/?workspace=replay&run_id={run_id}")
+        elif can_materialize:
+            replay = html.A(
+                "Materialize & replay",
+                href=(
+                    f"/api/risk/materialize?ensemble_id={quote(result.ensemble.ensemble_id)}"
+                    f"&sample_index={int(row['sample_index'])}"
+                ),
+            )
+        else:
+            replay = html.Span("Not materialized", className="muted")
+        body.append(
+            html.Tr(
+                [
+                    html.Td(str(int(row["sample_index"]))),
+                    html.Td("Abort" if bool(row["abort"]) else "Capture" if bool(row["capture_success"]) else str(row["terminal_phase"])),
+                    html.Td(f"{float(row['closest_approach_m']):.3f} m"),
+                    html.Td(f"{float(row['propellant_used_kg']):.2f} kg"),
+                    html.Td(replay),
+                ]
+            )
+        )
+    return html.Table([html.Thead(html.Tr([html.Th(item) for item in headers])), html.Tbody(body)], className="outlier-table")
+
+
+def _risk_kpis(html: Any, result: RiskQueryResult) -> list[Any]:
+    summary = result.summary
+    items = (
+        ("Capture", f"{float(summary['capture_rate']):.1%}"),
+        ("Abort", f"{float(summary['abort_rate']):.1%}"),
+        ("Samples", f"{int(summary['sample_count']):,}"),
+        ("P05 approach", f"{float(summary['p05_closest_approach_m']):.3f} m"),
+        ("P95 propellant", f"{float(summary['p95_propellant_used_kg']):.2f} kg"),
+    )
+    return [html.Div([html.Span(label), html.Strong(value)], className="kpi-card") for label, value in items]
+
+
+def create_app(
+    store: ReplayStore,
+    live_scenarios: list[dict[str, str]] | None = None,
+    risk_store: RiskStore | None = None,
+    risk_materializer: RiskSampleMaterializer | None = None,
+) -> Any:
     try:
         import plotly.graph_objects as go  # type: ignore[import-untyped]
         from dash import Dash, Input, Output, State, dcc, html
@@ -314,6 +432,35 @@ def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None =
     runs = store.list_runs()
     app = Dash(__name__, assets_folder=str(Path(__file__).with_name("assets")))
     app.title = "A3 DockLab Mission Replay"
+    if risk_materializer is not None:
+        from flask import redirect, request
+
+        @app.server.get("/api/risk/materialize")
+        def materialize_risk_sample() -> Any:
+            ensemble_id = request.args.get("ensemble_id", "")
+            try:
+                sample_index = int(request.args.get("sample_index", ""))
+                status = risk_materializer.materialize_sample(ensemble_id, sample_index)
+            except (KeyError, ValueError) as exc:
+                return {"error": str(exc)}, 400
+            if status.state == "completed" and status.run_id:
+                return redirect(f"/?workspace=replay&run_id={quote(status.run_id)}")
+            return redirect(
+                f"/?workspace=risk&materialization_operation={quote(status.operation_id)}"
+            )
+
+        @app.server.get("/api/risk/materialization-status")
+        def risk_materialization_status() -> Any:
+            operation_id = request.args.get("operation_id", "")
+            if not operation_id:
+                return {"error": "operation_id is required"}, 400
+            status = risk_materializer.materialization_status(operation_id)
+            return {
+                "operation_id": status.operation_id,
+                "state": status.state,
+                "run_id": status.run_id,
+                "detail": status.detail,
+            }
     empty_live = go.Figure()
     empty_live.add_trace(
         go.Scatter3d(
@@ -557,8 +704,43 @@ def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None =
             html.Pre(id="event-list"),
         ]
     )
+    ensembles = risk_store.list_ensembles() if risk_store is not None else []
+    risk_layout = html.Div(
+        [
+            html.H2("Risk Workspace"),
+            html.P("Explore bounded Monte Carlo evidence with immutable ensemble provenance."),
+            dcc.Interval(id="risk-materialization-poll", interval=2000, disabled=False),
+            html.Div(id="risk-materialization-status", className="provenance-card"),
+            dcc.Dropdown(
+                id="risk-ensemble-selector",
+                options=[
+                    {
+                        "label": f"{item.scenario} · {item.sample_count:,} samples · {item.ensemble_id}",
+                        "value": item.ensemble_id,
+                    }
+                    for item in ensembles
+                ],
+                value=ensembles[0].ensemble_id if ensembles else None,
+                placeholder="No ensembles available — run the Monte Carlo job first",
+            ),
+            html.Div(id="risk-kpis", className="kpi-strip risk-kpis"),
+            html.Div(
+                [dcc.Graph(id="risk-distributions"), dcc.Graph(id="risk-convergence")],
+                className="risk-chart-grid",
+            ),
+            dcc.Graph(id="risk-sensitivity"),
+            html.Div(
+                [dcc.Graph(id="risk-contact"), dcc.Graph(id="risk-faults")],
+                className="risk-chart-grid",
+            ),
+            html.H3("Highest-risk samples"),
+            html.Div(id="risk-outliers"),
+            html.Div(id="risk-provenance", className="provenance-card"),
+        ]
+    )
     app.layout = html.Main(
         [
+            dcc.Location(id="workspace-location", refresh="callback-nav"),
             dcc.Store(id="replay-data"),
             dcc.Store(id="client-clock"),
             html.Header(
@@ -570,6 +752,7 @@ def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None =
                 children=[
                     dcc.Tab(label="Live Lab", value="live", children=live_layout),
                     dcc.Tab(label="Replay", value="replay", children=replay_layout),
+                    dcc.Tab(label="Risk", value="risk", children=risk_layout),
                 ],
             ),
         ],
@@ -597,7 +780,7 @@ def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None =
         if run_id is None:
             empty = go.Figure().update_layout(template="plotly_dark", uirevision="empty")
             return None, 1.0, 0.0, [], empty, empty, empty, ""
-        manifest = next(run for run in runs if run.run_id == run_id)
+        manifest = next(run for run in store.list_runs() if run.run_id == run_id)
         payload, options = load_replay_payload(store, manifest)
         maximum = int(payload["truth"]["event_time_ns"][-1]) / 1_000_000_000
         event_text = "\n".join(option["label"] for option in options)
@@ -611,6 +794,79 @@ def create_app(store: ReplayStore, live_scenarios: list[dict[str, str]] | None =
             _health_figure(go, payload),
             event_text,
         )
+
+    @app.callback(
+        Output("risk-kpis", "children"),
+        Output("risk-distributions", "figure"),
+        Output("risk-convergence", "figure"),
+        Output("risk-sensitivity", "figure"),
+        Output("risk-contact", "figure"),
+        Output("risk-faults", "figure"),
+        Output("risk-outliers", "children"),
+        Output("risk-provenance", "children"),
+        Input("risk-ensemble-selector", "value"),
+    )
+    def configure_risk(ensemble_id: str | None) -> tuple[Any, ...]:
+        if ensemble_id is None or risk_store is None:
+            empty = go.Figure().update_layout(template="plotly_dark", uirevision="risk-empty")
+            return [], empty, empty, empty, empty, empty, "", "No risk ensemble is available."
+        budget = AnalysisBudget(max_rows=250_000, max_points_per_trace=10_000, timeout_s=30)
+        result = risk_store.query_ensemble(ensemble_id, budget=budget)
+        figures = _risk_figures(go, result, budget.max_points_per_trace)
+        details = _risk_detail_figures(go, result)
+        provenance = (
+            f"Schema {result.ensemble.schema_version} · config "
+            f"{result.ensemble.configuration_hash[:12]} · {result.rows_scanned:,} rows · "
+            f"{result.query_latency_ms:.1f} ms · {result.ensemble.source_uri}"
+        )
+        return (
+            _risk_kpis(html, result), *figures, *details,
+            _outlier_table(
+                html, result, {run.run_id for run in store.list_runs()},
+                risk_materializer is not None,
+            ),
+            provenance,
+        )
+
+    @app.callback(
+        Output("workspace-tabs", "value"),
+        Output("run-selector", "value"),
+        Output("run-selector", "options"),
+        Input("workspace-location", "search"),
+    )
+    def restore_workspace_link(search: str | None) -> tuple[str, Any, list[dict[str, str]]]:
+        query = parse_qs((search or "").lstrip("?"))
+        workspace = query.get("workspace", ["live"])[0]
+        if workspace not in {"live", "replay", "risk"}:
+            workspace = "live"
+        available_runs = store.list_runs()
+        requested_run = query.get("run_id", [None])[0]
+        valid_run = (
+            requested_run if requested_run in {run.run_id for run in available_runs} else None
+        )
+        if workspace == "replay" and valid_run is None and available_runs:
+            valid_run = available_runs[0].run_id
+        options = [
+            {"label": f"{run.scenario_id} · {run.run_id[-12:]}", "value": run.run_id}
+            for run in available_runs
+        ]
+        return workspace, valid_run, options
+
+    @app.callback(
+        Output("risk-materialization-status", "children"),
+        Output("risk-materialization-poll", "disabled"),
+        Input("risk-materialization-poll", "n_intervals"),
+        State("workspace-location", "search"),
+    )
+    def report_materialization_status(_: int, search: str | None) -> tuple[str, bool]:
+        query = parse_qs((search or "").lstrip("?"))
+        operation_id = query.get("materialization_operation", [None])[0]
+        if operation_id is None or risk_materializer is None:
+            return "", True
+        status = risk_materializer.materialization_status(operation_id)
+        terminal = status.state in {"completed", "failed", "unknown"}
+        detail = f" · {status.detail}" if status.detail else ""
+        return f"Sample materialization: {status.state}{detail}", terminal
 
     app.clientside_callback(
         """function(clicks) { const playing = (clicks || 0) % 2 === 1; return [!playing, playing ? 'Pause' : 'Play']; }""",

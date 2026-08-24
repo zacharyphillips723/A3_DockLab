@@ -21,9 +21,12 @@ def test_databricks_bundle_declares_targets_and_platform_resources() -> None:
     assert bundle["targets"]["prod"]["mode"] == "production"
     assert "default" not in bundle["variables"]["warehouse_id"]
     assert "smoke" in bundle["scripts"]
-    assert {"simulation", "monte_carlo", "session_materialization"} <= resources[
-        "jobs"
-    ].keys()
+    assert {
+        "simulation",
+        "monte_carlo",
+        "session_materialization",
+        "risk_sample_materialization",
+    } <= resources["jobs"].keys()
     for job in resources["jobs"].values():
         tasks = {task["task_key"]: task for task in job["tasks"]}
         assert "setup_lakehouse" in tasks
@@ -40,8 +43,9 @@ def test_databricks_bundle_declares_targets_and_platform_resources() -> None:
         "application_state",
         "simulation_job",
         "monte_carlo_job",
-        "session_materialization_job",
-        "experiment",
+            "session_materialization_job",
+            "risk_sample_materialization_job",
+            "experiment",
     }
 
 

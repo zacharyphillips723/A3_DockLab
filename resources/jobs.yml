@@ -124,6 +124,48 @@ resources:
             dependencies:
               - ${workspace.file_path}
 
+    risk_sample_materialization:
+      name: a3-docklab-risk-sample-materialization-${bundle.target}
+      max_concurrent_runs: 4
+      parameters:
+        - name: ensemble_id
+          default: required-ensemble-id
+        - name: sample_index
+          default: "0"
+      tasks:
+        - task_key: setup_lakehouse
+          spark_python_task:
+            python_file: ../databricks/jobs/setup_lakehouse.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+          environment_key: default
+        - task_key: materialize_risk_sample
+          depends_on:
+            - task_key: setup_lakehouse
+          spark_python_task:
+            python_file: ../databricks/jobs/materialize_risk_sample.py
+            parameters:
+              - --ensemble-id
+              - "{{job.parameters.ensemble_id}}"
+              - --sample-index
+              - "{{job.parameters.sample_index}}"
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --assets-root
+              - ${workspace.file_path}
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - ${workspace.file_path}
+
   experiments:
     a3docklab:
       name: ${workspace.root_path}/experiments/a3docklab

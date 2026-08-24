@@ -21,6 +21,8 @@ resources:
             value: /Volumes/${var.catalog}/${var.schema}/${var.session_artifact_volume}
           - name: A3DOCKLAB_SESSION_MATERIALIZATION_JOB_ID
             value: ${resources.jobs.session_materialization.id}
+          - name: A3DOCKLAB_RISK_MATERIALIZATION_JOB_ID
+            value: ${resources.jobs.risk_sample_materialization.id}
       resources:
         - name: application_state
           database:
@@ -42,6 +44,10 @@ resources:
         - name: session_materialization_job
           job:
             id: ${resources.jobs.session_materialization.id}
+            permission: CAN_MANAGE_RUN
+        - name: risk_sample_materialization_job
+          job:
+            id: ${resources.jobs.risk_sample_materialization.id}
             permission: CAN_MANAGE_RUN
         - name: experiment
           experiment:
