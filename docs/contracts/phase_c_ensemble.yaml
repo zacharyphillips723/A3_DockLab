@@ -13,17 +13,25 @@ artifacts:
       - execution_backend
       - partition_count
       - sample_seed_strategy
+      - ensemble_config
+      - base_configuration
+      - telemetry_configuration
   runs.parquet:
     primary_key: [sample_index]
     required_columns:
       - sample_index
       - sample_seed
+      - run_id
       - scenario
       - terminal_phase
       - capture_success
       - abort
       - propellant_used_kg
       - closest_approach_m
+      - contact_closing_rate_m_s
+      - contact_lateral_offset_m
+      - contact_angular_error_deg
+      - capture_dissipated_energy_j
       - maximum_lateral_offset_m
       - maximum_angular_error_deg
       - allocation_saturation_fraction

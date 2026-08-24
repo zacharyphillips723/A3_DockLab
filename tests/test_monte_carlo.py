@@ -53,7 +53,15 @@ def test_small_ensemble_has_manifest_metrics_and_convergence() -> None:
     assert len(result.runs) == 3
     assert len(result.convergence) == 3
     assert result.manifest["sample_count"] == 3
+    assert result.manifest["base_configuration"]["duration_s"] == 3.0
     assert result.risk_summary["sample_count"] == 3
+    assert {
+        "run_id",
+        "contact_closing_rate_m_s",
+        "contact_lateral_offset_m",
+        "contact_angular_error_deg",
+        "capture_dissipated_energy_j",
+    } <= set(result.runs.columns)
 
 
 def test_fault_sampling_and_estimator_metrics_are_reproducible() -> None:

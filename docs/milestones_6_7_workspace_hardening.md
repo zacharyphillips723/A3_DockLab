@@ -33,6 +33,48 @@ rather than receiving those controls afterward.
 - Tests reject unbounded analysis requests and mismatched schemas without an
   explicit compatibility map, and prove review history remains attributable.
 
+## Risk workspace slice
+
+- A storage-neutral Risk service reads the same immutable ensemble contract
+  from local Parquet/JSON artifacts or the Databricks Delta ensemble tables.
+- The Risk tab presents capture/abort KPIs, closest-approach and propellant
+  distributions, convergence, and a transparent correlation-based sensitivity
+  screen. It retains schema, configuration hash, source URI, rows scanned, and
+  query latency beside every selected ensemble.
+- `AnalysisBudget` limits rows, elapsed query time, and rendered convergence
+  points. Local execution and Databricks SQL use the same page contract.
+- The remaining Risk work is richer contact-condition metrics, categorical
+  fault sensitivity, ensemble-to-run drill-through, and persisted operational
+  telemetry/service targets.
+
+### Risk detail slice
+
+- New ensembles retain deterministic sample `run_id` plus closing rate,
+  lateral offset, angular error, and dissipated energy at capture. Older
+  ensembles continue to render with an explicit unavailable state.
+- Fault-conditioned capture/abort outcomes and contact-condition distributions
+  make categorical faults and docking quality directly explorable.
+- A ranked outlier table links to Replay when the deterministic sample run has
+  been materialized in the replay store; otherwise it explicitly reports
+  `Not materialized` rather than creating a broken or non-reproducible link.
+- URL workspace/run restoration supports links of the form
+  `?workspace=replay&run_id=...` and `?workspace=risk`.
+
+### On-demand sample materialization
+
+- Ensemble manifests now embed the validated base scenario, ensemble sampling
+  configuration, and telemetry configuration. A later rebuild never silently
+  substitutes a changed project YAML file.
+- Local Risk links rebuild exactly one selected sample, write a versioned Phase
+  3 bundle, refresh the replay catalog, and redirect to its deep-linked Replay.
+- Materialization validates ensemble and sample identity before filesystem
+  access. Older ensembles without immutable rebuild inputs fail explicitly.
+- The `RiskSampleMaterializer` boundary keeps generation out of the dashboard.
+  In Databricks the App launches a dedicated, concurrency-bounded DAB Job,
+  reports queued/running/completed/failed state, and writes the selected sample
+  through `DeltaRunStorage`. The App service principal receives only the
+  corresponding `CAN_MANAGE_RUN` job resource permission.
+
 ## Combined acceptance gate
 
 - Every displayed result resolves to immutable stored artifacts and config.
