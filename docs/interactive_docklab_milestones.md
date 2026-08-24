@@ -173,6 +173,10 @@ the physics core portable and locally testable.
 
 ## Milestone 6 — Risk, comparison, and review workspace
 
+**Status:** In progress jointly with Milestone 7. Versioned artifact,
+schema-aware comparison, reproducible review, bounded-query, and immutable
+review-history foundations are implemented first.
+
 ### Goal
 
 Turn live experiments into an operational digital-twin analysis workflow.
@@ -194,6 +198,10 @@ Turn live experiments into an operational digital-twin analysis workflow.
 - Approval state and annotations remain attributable and immutable in history.
 
 ## Milestone 7 — Operational hardening
+
+**Status:** In progress jointly with Milestone 6. Resource budgets, schema
+compatibility, and append-only audit contracts are embedded in workspace
+features from their first implementation slice.
 
 ### Goal
 

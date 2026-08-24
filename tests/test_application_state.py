@@ -46,6 +46,10 @@ def test_application_state_round_trip(tmp_path: Path) -> None:
     )
     store.upsert_review(review)
     assert store.get_reviews("run-1") == [review]
+    history = store.get_review_history("run-1")
+    assert len(history) == 1
+    assert history[0].previous_status is None
+    assert history[0].status == "approved"
 
     comparison = new_comparison(
         "operator@example.com", "Nominal vs fault", "run-1", "run-2", "mission_phase"
@@ -63,6 +67,32 @@ def test_application_state_is_owner_and_run_scoped(tmp_path: Path) -> None:
 
     assert [item.text for item in store.list_annotations("run-a")] == ["A"]
     assert [item.name for item in store.list_views("a@example.com")] == ["A view"]
+
+
+def test_review_updates_preserve_immutable_attributed_history(tmp_path: Path) -> None:
+    store = _store(tmp_path / "state.db")
+    first = RunReview(
+        run_id="run-1",
+        reviewer="reviewer@example.com",
+        status="in_review",
+        notes="Checking capture",
+        updated_at_utc=datetime(2026, 8, 21, 12, tzinfo=UTC),
+    )
+    approved = first.model_copy(
+        update={
+            "status": "approved",
+            "notes": "Capture verified",
+            "updated_at_utc": datetime(2026, 8, 21, 13, tzinfo=UTC),
+        }
+    )
+    store.upsert_review(first)
+    store.upsert_review(approved)
+
+    assert store.get_reviews("run-1") == [approved]
+    history = store.get_review_history("run-1")
+    assert [event.status for event in history] == ["in_review", "approved"]
+    assert [event.previous_status for event in history] == [None, "in_review"]
+    assert all(event.reviewer == "reviewer@example.com" for event in history)
 
 
 def test_durable_session_checkpoint_survives_store_restart(tmp_path: Path) -> None:
