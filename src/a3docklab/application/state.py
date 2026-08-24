@@ -41,6 +41,16 @@ class RunReview(BaseModel):
     updated_at_utc: datetime
 
 
+class RunReviewHistory(BaseModel):
+    review_event_id: str
+    run_id: str
+    reviewer: str
+    previous_status: str | None = None
+    status: Literal["pending", "in_review", "approved", "rejected"]
+    notes: str = ""
+    recorded_at_utc: datetime
+
+
 class SavedComparison(BaseModel):
     comparison_id: str
     owner: str
@@ -147,6 +157,10 @@ class ApplicationStateStore:
                 run_id TEXT NOT NULL, reviewer TEXT NOT NULL, status TEXT NOT NULL,
                 notes TEXT NOT NULL, updated_at_utc TEXT NOT NULL,
                 PRIMARY KEY (run_id, reviewer))""",
+            """CREATE TABLE IF NOT EXISTS run_review_history (
+                review_event_id TEXT PRIMARY KEY, run_id TEXT NOT NULL,
+                reviewer TEXT NOT NULL, previous_status TEXT, status TEXT NOT NULL,
+                notes TEXT NOT NULL, recorded_at_utc TEXT NOT NULL)""",
             """CREATE TABLE IF NOT EXISTS saved_comparisons (
                 comparison_id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,
                 baseline_run_id TEXT NOT NULL, candidate_run_id TEXT NOT NULL,
@@ -258,19 +272,47 @@ class ApplicationStateStore:
         ]
 
     def upsert_review(self, review: RunReview) -> None:
-        marks = ", ".join([self.placeholder] * 5)
-        self._execute(
-            f"INSERT INTO run_reviews VALUES ({marks}) ON CONFLICT (run_id, reviewer) "
-            "DO UPDATE SET status = excluded.status, notes = excluded.notes, "
-            "updated_at_utc = excluded.updated_at_utc",
-            (
-                review.run_id,
-                review.reviewer,
-                review.status,
-                review.notes,
-                review.updated_at_utc.isoformat(),
-            ),
-        )
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    f"SELECT status FROM run_reviews WHERE run_id = {self.placeholder} "
+                    f"AND reviewer = {self.placeholder}",
+                    (review.run_id, review.reviewer),
+                )
+                previous = cursor.fetchone()
+                marks = ", ".join([self.placeholder] * 7)
+                cursor.execute(
+                    f"INSERT INTO run_review_history VALUES ({marks})",
+                    (
+                        str(uuid.uuid4()),
+                        review.run_id,
+                        review.reviewer,
+                        previous[0] if previous else None,
+                        review.status,
+                        review.notes,
+                        review.updated_at_utc.isoformat(),
+                    ),
+                )
+                marks = ", ".join([self.placeholder] * 5)
+                cursor.execute(
+                    f"INSERT INTO run_reviews VALUES ({marks}) ON CONFLICT (run_id, reviewer) "
+                    "DO UPDATE SET status = excluded.status, notes = excluded.notes, "
+                    "updated_at_utc = excluded.updated_at_utc",
+                    (
+                        review.run_id,
+                        review.reviewer,
+                        review.status,
+                        review.notes,
+                        review.updated_at_utc.isoformat(),
+                    ),
+                )
+                connection.commit()
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
 
     def get_reviews(self, run_id: str) -> list[RunReview]:
         rows = self._execute(
@@ -281,6 +323,21 @@ class ApplicationStateStore:
         )
         return [
             RunReview.model_validate(dict(zip(RunReview.model_fields, row, strict=True)))
+            for row in rows
+        ]
+
+    def get_review_history(self, run_id: str) -> list[RunReviewHistory]:
+        rows = self._execute(
+            "SELECT review_event_id, run_id, reviewer, previous_status, status, notes, "
+            f"recorded_at_utc FROM run_review_history WHERE run_id = {self.placeholder} "
+            "ORDER BY recorded_at_utc, review_event_id",
+            (run_id,),
+            fetch=True,
+        )
+        return [
+            RunReviewHistory.model_validate(
+                dict(zip(RunReviewHistory.model_fields, row, strict=True))
+            )
             for row in rows
         ]
 
