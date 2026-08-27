@@ -48,9 +48,7 @@ def risk_store() -> RiskStore:
         catalog = os.environ.get("A3DOCKLAB_CATALOG", "main")
         schema = os.environ.get("A3DOCKLAB_SCHEMA", "a3docklab")
         executor = DatabricksSqlExecutor(host, warehouse_id)
-        return DeltaRiskStore(
-            SqlWarehouseDeltaCatalog(executor), f"{catalog}.{schema}.a3docklab"
-        )
+        return DeltaRiskStore(SqlWarehouseDeltaCatalog(executor), f"{catalog}.{schema}.a3docklab")
     return LocalRiskStore(Path(os.getenv("A3DOCKLAB_ENSEMBLE_ROOT", "ensembles")))
 
 
@@ -91,7 +89,11 @@ simulation_service = InteractiveSimulationService(
     materializer=session_materializer,
 )
 app = create_app(
-    replay_store(), simulation_service.list_scenarios(), risk_store(), risk_materializer()
+    replay_store(),
+    simulation_service.list_scenarios(),
+    risk_store(),
+    risk_materializer(),
+    state_store,
 )
 server = app.server
 register_state_routes(server, lambda: state_store)

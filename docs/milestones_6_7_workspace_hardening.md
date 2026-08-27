@@ -95,6 +95,26 @@ policy-version, safety-intervention, and event-level diff tables. That slice
 joins naturally with the Review workspace because saved comparisons need actor,
 annotation, approval, and immutable view-state history.
 
+### Saved comparison and detailed-diff slice
+
+- Compare now counts command sources, controller authorities, policy IDs and
+  versions when present, mission-event types, and safety-margin violations for
+  baseline and candidate artifacts. The detailed table reports explicit deltas
+  beside the existing aligned plots and KPI scorecard.
+- Owner-scoped saved comparisons retain the complete validated
+  `ComparisonSpec`, including immutable artifact references, alignment, schema
+  mapping, and analysis budget. Saving or restoring never resolves only by a
+  mutable display name.
+- Lakebase adds `comparison_spec_json` through a tested backward-compatible
+  migration. The HTTP API validates saved specs and derives owner identity from
+  the Databricks forwarded user header.
+
+The remaining Milestone 6 work is the Review workspace: pinned annotations,
+saved replay views, approval/rejection controls, immutable history, audit
+export, and shareable reproducible view links. Milestone 7 then closes with
+observability/service targets, quotas and cleanup, load/soak/recovery tests,
+security review, and deployment/rollback exercises.
+
 ## Combined acceptance gate
 
 - Every displayed result resolves to immutable stored artifacts and config.

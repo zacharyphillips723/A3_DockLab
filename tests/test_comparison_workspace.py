@@ -71,6 +71,8 @@ def test_event_time_comparison_reports_overlap_and_kpi_deltas() -> None:
     assert len(result.aligned) == 3
     assert result.kpi_deltas["delta_propellant_used_kg"] == -1.0
     assert result.kpi_deltas["delta_safety_violations"] == 1.0
+    safety = result.detail_diffs[result.detail_diffs["category"] == "Safety"]
+    assert safety["delta"].max() == 1
     figures = _comparison_figures(go, result)
     assert figures[0].layout.uirevision.startswith("compare-trajectory-")
     assert [trace.name for trace in figures[0].data] == ["Baseline", "Candidate", "Target"]
