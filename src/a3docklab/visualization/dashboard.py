@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, quote
 import numpy as np
 import pandas as pd
 
+from a3docklab.analysis.comparison import ComparisonResult, compare_runs, parse_schema_mapping
 from a3docklab.analysis.contracts import AnalysisBudget
 from a3docklab.analysis.risk import RiskQueryResult, RiskSampleMaterializer, RiskStore
 from a3docklab.telemetry.contracts import BundleManifest
@@ -310,21 +311,51 @@ def _health_figure(go: Any, payload: dict[str, Any]) -> Any:
 def _risk_figures(go: Any, result: RiskQueryResult, point_budget: int) -> tuple[Any, Any, Any]:
     runs = result.runs
     distributions = go.Figure()
-    distributions.add_trace(go.Histogram(x=runs["closest_approach_m"], name="Closest approach (m)", opacity=0.72))
-    distributions.add_trace(go.Histogram(x=runs["propellant_used_kg"], name="Propellant used (kg)", opacity=0.72))
-    distributions.update_layout(template="plotly_dark", barmode="overlay", title="Outcome distributions", uirevision=f"risk-distributions-{result.ensemble.ensemble_id}")
+    distributions.add_trace(
+        go.Histogram(x=runs["closest_approach_m"], name="Closest approach (m)", opacity=0.72)
+    )
+    distributions.add_trace(
+        go.Histogram(x=runs["propellant_used_kg"], name="Propellant used (kg)", opacity=0.72)
+    )
+    distributions.update_layout(
+        template="plotly_dark",
+        barmode="overlay",
+        title="Outcome distributions",
+        uirevision=f"risk-distributions-{result.ensemble.ensemble_id}",
+    )
 
     convergence = result.convergence
     if len(convergence) > point_budget:
-        convergence = convergence.iloc[np.unique(np.linspace(0, len(convergence) - 1, point_budget, dtype=int))]
+        convergence = convergence.iloc[
+            np.unique(np.linspace(0, len(convergence) - 1, point_budget, dtype=int))
+        ]
     convergence_figure = go.Figure()
-    convergence_figure.add_trace(go.Scatter(x=convergence["sample_count"], y=convergence["capture_rate"], name="Capture rate"))
-    convergence_figure.add_trace(go.Scatter(x=convergence["sample_count"], y=convergence["abort_rate"], name="Abort rate"))
-    convergence_figure.update_layout(template="plotly_dark", title="Monte Carlo convergence", yaxis_tickformat=".0%", uirevision=f"risk-convergence-{result.ensemble.ensemble_id}")
+    convergence_figure.add_trace(
+        go.Scatter(
+            x=convergence["sample_count"], y=convergence["capture_rate"], name="Capture rate"
+        )
+    )
+    convergence_figure.add_trace(
+        go.Scatter(x=convergence["sample_count"], y=convergence["abort_rate"], name="Abort rate")
+    )
+    convergence_figure.update_layout(
+        template="plotly_dark",
+        title="Monte Carlo convergence",
+        yaxis_tickformat=".0%",
+        uirevision=f"risk-convergence-{result.ensemble.ensemble_id}",
+    )
 
     sensitivity = result.sensitivity.head(12).sort_values("importance")
-    sensitivity_figure = go.Figure(go.Bar(x=sensitivity["importance"], y=sensitivity["parameter"], orientation="h"))
-    sensitivity_figure.update_layout(template="plotly_dark", title="Input sensitivity (screening correlation)", xaxis_title="Absolute correlation", margin={"l": 190}, uirevision=f"risk-sensitivity-{result.ensemble.ensemble_id}")
+    sensitivity_figure = go.Figure(
+        go.Bar(x=sensitivity["importance"], y=sensitivity["parameter"], orientation="h")
+    )
+    sensitivity_figure.update_layout(
+        template="plotly_dark",
+        title="Input sensitivity (screening correlation)",
+        xaxis_title="Absolute correlation",
+        margin={"l": 190},
+        uirevision=f"risk-sensitivity-{result.ensemble.ensemble_id}",
+    )
     return distributions, convergence_figure, sensitivity_figure
 
 
@@ -340,9 +371,12 @@ def _risk_detail_figures(go: Any, result: RiskQueryResult) -> tuple[Any, Any]:
         if column in runs and runs[column].notna().any():
             contact.add_trace(go.Box(y=runs[column].dropna(), name=label, boxpoints="outliers"))
     if not contact.data:
-        contact.add_annotation(text="Contact metrics are unavailable in this older ensemble", showarrow=False)
+        contact.add_annotation(
+            text="Contact metrics are unavailable in this older ensemble", showarrow=False
+        )
     contact.update_layout(
-        template="plotly_dark", title="Contact conditions",
+        template="plotly_dark",
+        title="Contact conditions",
         uirevision=f"risk-contact-{result.ensemble.ensemble_id}",
     )
 
@@ -350,13 +384,17 @@ def _risk_detail_figures(go: Any, result: RiskQueryResult) -> tuple[Any, Any]:
     fault_figure = go.Figure()
     fault_figure.add_trace(
         go.Bar(
-            x=faults["abort_rate"], y=faults["fault"], orientation="h",
+            x=faults["abort_rate"],
+            y=faults["fault"],
+            orientation="h",
             customdata=np.column_stack((faults["run_count"], faults["capture_rate"])),
             hovertemplate="abort %{x:.1%}<br>capture %{customdata[1]:.1%}<br>runs %{customdata[0]}<extra></extra>",
         )
     )
     fault_figure.update_layout(
-        template="plotly_dark", title="Outcome by sampled fault", xaxis_tickformat=".0%",
+        template="plotly_dark",
+        title="Outcome by sampled fault",
+        xaxis_tickformat=".0%",
         uirevision=f"risk-faults-{result.ensemble.ensemble_id}",
     )
     return contact, fault_figure
@@ -395,14 +433,23 @@ def _outlier_table(
             html.Tr(
                 [
                     html.Td(str(int(row["sample_index"]))),
-                    html.Td("Abort" if bool(row["abort"]) else "Capture" if bool(row["capture_success"]) else str(row["terminal_phase"])),
+                    html.Td(
+                        "Abort"
+                        if bool(row["abort"])
+                        else "Capture"
+                        if bool(row["capture_success"])
+                        else str(row["terminal_phase"])
+                    ),
                     html.Td(f"{float(row['closest_approach_m']):.3f} m"),
                     html.Td(f"{float(row['propellant_used_kg']):.2f} kg"),
                     html.Td(replay),
                 ]
             )
         )
-    return html.Table([html.Thead(html.Tr([html.Th(item) for item in headers])), html.Tbody(body)], className="outlier-table")
+    return html.Table(
+        [html.Thead(html.Tr([html.Th(item) for item in headers])), html.Tbody(body)],
+        className="outlier-table",
+    )
 
 
 def _risk_kpis(html: Any, result: RiskQueryResult) -> list[Any]:
@@ -414,7 +461,115 @@ def _risk_kpis(html: Any, result: RiskQueryResult) -> list[Any]:
         ("P05 approach", f"{float(summary['p05_closest_approach_m']):.3f} m"),
         ("P95 propellant", f"{float(summary['p95_propellant_used_kg']):.2f} kg"),
     )
-    return [html.Div([html.Span(label), html.Strong(value)], className="kpi-card") for label, value in items]
+    return [
+        html.Div([html.Span(label), html.Strong(value)], className="kpi-card")
+        for label, value in items
+    ]
+
+
+def _comparison_figures(go: Any, result: ComparisonResult) -> tuple[Any, Any, Any]:
+    trajectory = go.Figure()
+    for name, frame, color in (
+        ("Baseline", result.baseline, "#5ee7ff"),
+        ("Candidate", result.candidate, "#ffcf5c"),
+    ):
+        trajectory.add_trace(
+            go.Scatter3d(
+                x=frame["x_m"],
+                y=frame["y_m"],
+                z=frame["z_m"],
+                mode="lines",
+                name=name,
+                line={"color": color, "width": 7},
+                customdata=np.column_stack((frame["phase"], frame["range_m"])),
+                hovertemplate="%{customdata[0]}<br>range %{customdata[1]:.3f} m<extra></extra>",
+            )
+        )
+    trajectory.add_trace(go.Scatter3d(x=[0], y=[0], z=[0], mode="markers", name="Target"))
+    trajectory.update_layout(
+        template="plotly_dark",
+        title="Trajectory overlay",
+        scene={"aspectmode": "data"},
+        uirevision=f"compare-trajectory-{result.baseline_manifest.run_id}-{result.candidate_manifest.run_id}",
+        margin={"l": 0, "r": 0, "t": 50, "b": 0},
+    )
+
+    aligned = result.aligned
+    timeline = go.Figure()
+    for prefix, label, color in (
+        ("baseline", "Baseline", "#5ee7ff"),
+        ("candidate", "Candidate", "#ffcf5c"),
+    ):
+        timeline.add_trace(
+            go.Scatter(
+                x=aligned["comparison_axis"],
+                y=aligned[f"{prefix}_range_m"],
+                name=f"{label} range",
+                line={"color": color},
+            )
+        )
+        timeline.add_trace(
+            go.Scatter(
+                x=aligned["comparison_axis"],
+                y=aligned[f"{prefix}_closing_rate_m_s"],
+                name=f"{label} closing rate",
+                line={"color": color, "dash": "dot"},
+                yaxis="y2",
+            )
+        )
+    timeline.update_layout(
+        template="plotly_dark",
+        title="Aligned range and closing rate",
+        xaxis_title=str(aligned["alignment_label"].iloc[0]),
+        yaxis2={"overlaying": "y", "side": "right"},
+        uirevision=f"compare-timeline-{result.spec.alignment}-{result.baseline_manifest.run_id}-{result.candidate_manifest.run_id}",
+    )
+
+    safety = go.Figure()
+    for prefix, label, color in (
+        ("baseline", "Baseline", "#5ee7ff"),
+        ("candidate", "Candidate", "#ffcf5c"),
+    ):
+        safety.add_trace(
+            go.Scatter(
+                x=aligned["comparison_axis"],
+                y=aligned[f"{prefix}_keep_out_margin_m"],
+                name=f"{label} keep-out",
+                line={"color": color},
+            )
+        )
+        safety.add_trace(
+            go.Scatter(
+                x=aligned["comparison_axis"],
+                y=aligned[f"{prefix}_corridor_margin_m"],
+                name=f"{label} corridor",
+                line={"color": color, "dash": "dot"},
+            )
+        )
+    safety.add_hline(y=0, line_color="#ff496c", line_width=2)
+    safety.update_layout(
+        template="plotly_dark",
+        title="Aligned safety margins",
+        xaxis_title=str(aligned["alignment_label"].iloc[0]),
+        uirevision=f"compare-safety-{result.spec.alignment}-{result.baseline_manifest.run_id}-{result.candidate_manifest.run_id}",
+    )
+    return trajectory, timeline, safety
+
+
+def _comparison_kpis(html: Any, result: ComparisonResult) -> list[Any]:
+    kpis = result.kpi_deltas
+    items = (
+        ("Closest approach Δ", f"{float(kpis['delta_closest_approach_m']):+.3f} m"),
+        ("Closing rate Δ", f"{float(kpis['delta_final_closing_rate_m_s']):+.3f} m/s"),
+        ("Propellant Δ", f"{float(kpis['delta_propellant_used_kg']):+.2f} kg"),
+        ("Duration Δ", f"{float(kpis['delta_duration_s']):+.1f} s"),
+        ("Safety violations Δ", f"{int(kpis['delta_safety_violations']):+d}"),
+        ("Command changes Δ", f"{int(kpis['delta_command_changes']):+d}"),
+    )
+    return [
+        html.Div([html.Span(label), html.Strong(value)], className="kpi-card")
+        for label, value in items
+    ]
 
 
 def create_app(
@@ -461,6 +616,7 @@ def create_app(
                 "run_id": status.run_id,
                 "detail": status.detail,
             }
+
     empty_live = go.Figure()
     empty_live.add_trace(
         go.Scatter3d(
@@ -738,6 +894,75 @@ def create_app(
             html.Div(id="risk-provenance", className="provenance-card"),
         ]
     )
+    run_options = [
+        {
+            "label": f"{run.scenario_id} · {run.run_id[-12:]} · schema {run.schema_version}",
+            "value": run.run_id,
+        }
+        for run in runs
+    ]
+    compare_layout = html.Div(
+        [
+            html.H2("Compare Workspace"),
+            html.P("Compare two immutable runs with explicit alignment and schema behavior."),
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Label("Baseline"),
+                            dcc.Dropdown(
+                                id="compare-baseline",
+                                options=run_options,
+                                value=runs[0].run_id if runs else None,
+                            ),
+                        ]
+                    ),
+                    html.Div(
+                        [
+                            html.Label("Candidate"),
+                            dcc.Dropdown(
+                                id="compare-candidate",
+                                options=run_options,
+                                value=runs[1].run_id
+                                if len(runs) > 1
+                                else runs[0].run_id
+                                if runs
+                                else None,
+                            ),
+                        ]
+                    ),
+                    html.Div(
+                        [
+                            html.Label("Alignment"),
+                            dcc.Dropdown(
+                                id="compare-alignment",
+                                options=[
+                                    {"label": "Event time", "value": "event_time"},
+                                    {"label": "Mission phase", "value": "mission_phase"},
+                                ],
+                                value="event_time",
+                                clearable=False,
+                            ),
+                        ]
+                    ),
+                ],
+                className="compare-controls",
+            ),
+            html.Label(
+                "Schema mapping (candidate column → baseline column JSON; required when schemas differ)"
+            ),
+            dcc.Textarea(id="compare-schema-mapping", value="{}", className="schema-mapping"),
+            html.Button("Compare runs", id="compare-submit", className="primary-control"),
+            html.Div(id="compare-error", className="comparison-error"),
+            html.Div(id="compare-kpis", className="kpi-strip compare-kpis"),
+            dcc.Graph(id="compare-trajectory"),
+            html.Div(
+                [dcc.Graph(id="compare-timeline"), dcc.Graph(id="compare-safety")],
+                className="risk-chart-grid",
+            ),
+            html.Div(id="compare-provenance", className="provenance-card"),
+        ]
+    )
     app.layout = html.Main(
         [
             dcc.Location(id="workspace-location", refresh="callback-nav"),
@@ -753,6 +978,7 @@ def create_app(
                     dcc.Tab(label="Live Lab", value="live", children=live_layout),
                     dcc.Tab(label="Replay", value="replay", children=replay_layout),
                     dcc.Tab(label="Risk", value="risk", children=risk_layout),
+                    dcc.Tab(label="Compare", value="compare", children=compare_layout),
                 ],
             ),
         ],
@@ -820,9 +1046,13 @@ def create_app(
             f"{result.query_latency_ms:.1f} ms · {result.ensemble.source_uri}"
         )
         return (
-            _risk_kpis(html, result), *figures, *details,
+            _risk_kpis(html, result),
+            *figures,
+            *details,
             _outlier_table(
-                html, result, {run.run_id for run in store.list_runs()},
+                html,
+                result,
+                {run.run_id for run in store.list_runs()},
                 risk_materializer is not None,
             ),
             provenance,
@@ -837,7 +1067,7 @@ def create_app(
     def restore_workspace_link(search: str | None) -> tuple[str, Any, list[dict[str, str]]]:
         query = parse_qs((search or "").lstrip("?"))
         workspace = query.get("workspace", ["live"])[0]
-        if workspace not in {"live", "replay", "risk"}:
+        if workspace not in {"live", "replay", "risk", "compare"}:
             workspace = "live"
         available_runs = store.list_runs()
         requested_run = query.get("run_id", [None])[0]
@@ -867,6 +1097,50 @@ def create_app(
         terminal = status.state in {"completed", "failed", "unknown"}
         detail = f" · {status.detail}" if status.detail else ""
         return f"Sample materialization: {status.state}{detail}", terminal
+
+    @app.callback(
+        Output("compare-kpis", "children"),
+        Output("compare-trajectory", "figure"),
+        Output("compare-timeline", "figure"),
+        Output("compare-safety", "figure"),
+        Output("compare-provenance", "children"),
+        Output("compare-error", "children"),
+        Input("compare-submit", "n_clicks"),
+        State("compare-baseline", "value"),
+        State("compare-candidate", "value"),
+        State("compare-alignment", "value"),
+        State("compare-schema-mapping", "value"),
+    )
+    def configure_comparison(
+        _: int,
+        baseline_id: str | None,
+        candidate_id: str | None,
+        alignment: str,
+        mapping_json: str | None,
+    ) -> tuple[Any, ...]:
+        empty = go.Figure().update_layout(template="plotly_dark", uirevision="compare-empty")
+        if baseline_id is None or candidate_id is None:
+            return [], empty, empty, empty, "", "Select both runs."
+        manifests = {run.run_id: run for run in store.list_runs()}
+        try:
+            result = compare_runs(
+                store,
+                manifests[baseline_id],
+                manifests[candidate_id],
+                alignment=alignment,
+                schema_mapping=parse_schema_mapping(mapping_json),
+                budget=AnalysisBudget(max_rows=250_000, max_points_per_trace=10_000, timeout_s=30),
+            )
+        except (KeyError, ValueError, TimeoutError) as exc:
+            return [], empty, empty, empty, "", str(exc)
+        figures = _comparison_figures(go, result)
+        provenance = (
+            f"Baseline {result.baseline_manifest.run_id} ({result.baseline_manifest.configuration_hash[:12]}) · "
+            f"candidate {result.candidate_manifest.run_id} ({result.candidate_manifest.configuration_hash[:12]}) · "
+            f"{result.spec.alignment} · overlap {result.overlap_duration_s:.1f} s · "
+            f"{result.rows_scanned:,} rows · {result.query_latency_ms:.1f} ms"
+        )
+        return _comparison_kpis(html, result), *figures, provenance, ""
 
     app.clientside_callback(
         """function(clicks) { const playing = (clicks || 0) % 2 === 1; return [!playing, playing ? 'Pause' : 'Play']; }""",
