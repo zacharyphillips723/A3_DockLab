@@ -84,6 +84,8 @@ class InteractiveSimulationService:
         clock: Callable[[], datetime] | None = None,
         holder_id: str | None = None,
         materializer: SessionMaterializer | None = None,
+        max_active_sessions: int = 32,
+        max_active_sessions_per_owner: int = 4,
     ) -> None:
         self.scenarios = dict(scenarios)
         self._id_factory = id_factory or (lambda: str(uuid4()))
@@ -93,6 +95,10 @@ class InteractiveSimulationService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._holder_id = holder_id or f"app:{uuid4()}"
         self._materializer = materializer
+        if max_active_sessions < 1 or max_active_sessions_per_owner < 1:
+            raise ValueError("session quotas must be positive")
+        self._max_active_sessions = max_active_sessions
+        self._max_active_sessions_per_owner = max_active_sessions_per_owner
         self._sessions: dict[str, dict[str, Any]] = {}
         self._lock = RLock()
 
@@ -150,6 +156,16 @@ class InteractiveSimulationService:
             raise SessionNotFound(f"unknown scenario: {scenario_id}")
         if fault not in self.FAULTS:
             raise ValueError(f"unsupported fault: {fault}")
+        with self._lock:
+            active = [
+                entry
+                for entry in self._sessions.values()
+                if not entry["terminated"] and not entry["session"].complete
+            ]
+            if len(active) >= self._max_active_sessions:
+                raise SessionConflict("active session quota exceeded")
+            if sum(entry["owner"] == owner for entry in active) >= self._max_active_sessions_per_owner:
+                raise SessionConflict("active session quota exceeded for owner")
         session_id = self._id_factory()
         token = self._token_factory()
         driver_id = f"human:{owner}:{session_id}"
@@ -228,6 +244,9 @@ class InteractiveSimulationService:
                 "model_version": model_version,
                 "code_revision": code_revision,
                 "materialized_manifest": None,
+                "created_at_utc": now,
+                "frame_count": 0,
+                "safety_interventions": 0,
             }
         status = self.status(session_id)
         status["control_token"] = token
@@ -317,6 +336,9 @@ class InteractiveSimulationService:
                 "model_version": model_version,
                 "code_revision": code_revision,
                 "materialized_manifest": metadata.get("materialized_manifest"),
+                "created_at_utc": durable.updated_at_utc,
+                "frame_count": int(metadata.get("frame_count", checkpoint.step_index + 1)),
+                "safety_interventions": int(metadata.get("safety_interventions", 0)),
             }
         status = self.status(session_id)
         status["control_token"] = token
@@ -376,6 +398,8 @@ class InteractiveSimulationService:
                     "checkpoint": snapshot["checkpoint"],
                     "engine_checkpoint": engine_checkpoint,
                     "requested_intent": snapshot["requested_intent"],
+                    "frame_count": entry["frame_count"],
+                    "safety_interventions": entry["safety_interventions"],
                 },
                 cast(int, entry["persisted_version"]),
             )
@@ -484,6 +508,49 @@ class InteractiveSimulationService:
                 "frame": self._frame_payload(entry["last_frame"] or session.current),
                 "checkpoint": checkpoint,
                 "requested_intent": entry["requested_intent"],
+            }
+
+    def operational_snapshot(self) -> dict[str, Any]:
+        """Return low-cardinality service metrics without exposing session payloads."""
+        with self._lock:
+            entries = list(self._sessions.values())
+            active = [
+                entry
+                for entry in entries
+                if not entry["terminated"] and not entry["session"].complete
+            ]
+            evaluations = [
+                evaluation
+                for entry in entries
+                for evaluation in entry["policy_evaluations"]
+            ]
+            latencies = sorted(float(item.get("latency_ms", 0.0)) for item in evaluations)
+            p95_index = max(0, math.ceil(len(latencies) * 0.95) - 1)
+            simulation_steps = sum(int(entry["frame_count"]) for entry in entries)
+            simulated_seconds = sum(
+                float(entry["session"].current.state.get("time_s", 0.0))
+                for entry in entries
+                if entry["session"].current is not None
+            )
+            safety_interventions = sum(int(entry["safety_interventions"]) for entry in entries)
+            oldest = min((entry["created_at_utc"] for entry in entries), default=self._clock())
+            elapsed_s = max((self._clock() - oldest).total_seconds(), 1e-9)
+            return {
+                "total_sessions": len(entries),
+                "active_sessions": len(active),
+                "simulation_steps": simulation_steps,
+                "simulation_rate_hz": simulation_steps / elapsed_s,
+                "simulated_seconds": simulated_seconds,
+                "policy_evaluations": len(evaluations),
+                "policy_latency_p95_ms": latencies[p95_index] if latencies else 0.0,
+                "policy_budget_exceeded": sum(
+                    float(item.get("latency_ms", 0.0))
+                    > float(item.get("latency_budget_ms", float("inf")))
+                    for item in evaluations
+                ),
+                "safety_interventions": safety_interventions,
+                "session_quota": self._max_active_sessions,
+                "owner_session_quota": self._max_active_sessions_per_owner,
             }
 
     def command_log(self, session_id: str) -> dict[str, Any]:
@@ -595,6 +662,8 @@ class InteractiveSimulationService:
                 entry["last_frame"] = None
                 entry["policy_evaluations"] = []
                 entry["materialized_manifest"] = None
+                entry["frame_count"] = 0
+                entry["safety_interventions"] = 0
             elif action == "terminate":
                 session.pause()
                 entry["terminated"] = True
@@ -603,6 +672,9 @@ class InteractiveSimulationService:
                 try:
                     frame = session.step(intent)
                     entry["last_frame"] = frame
+                    entry["frame_count"] += 1
+                    if frame.decision is not None and frame.decision.status.value != "accepted":
+                        entry["safety_interventions"] += 1
                     for authority, evaluation in (
                         ("active", frame.active_policy_evaluation),
                         ("shadow", frame.shadow_policy_evaluation),

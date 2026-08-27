@@ -1,5 +1,5 @@
 (function () {
-  const live = { sessionId: null, token: null, running: false, busy: false, timer: null, events: [], lastStep: -1 };
+  const live = { sessionId: null, token: null, running: false, busy: false, timer: null, events: [], lastStep: -1, droppedFrames: 0, reconnects: 0 };
   const byId = (id) => document.getElementById(id);
   const value = (id) => {
     const host = byId(id);
@@ -16,6 +16,19 @@
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     return body;
+  }
+
+  async function reportClientMetrics() {
+    if (!live.droppedFrames && !live.reconnects) return;
+    const payload = {dropped_frames: live.droppedFrames, reconnects: live.reconnects};
+    live.droppedFrames = 0; live.reconnects = 0;
+    try {
+      await fetch("/api/operations/client-metrics", {
+        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)
+      });
+    } catch (_) {
+      live.droppedFrames += payload.dropped_frames; live.reconnects += payload.reconnects;
+    }
   }
 
   function requestId() {
@@ -102,6 +115,7 @@
     const rate = +(dropdownRawValue("live-rate") || 10);
     live.timer = setInterval(async () => {
       if (!live.running) return;
+      if (live.busy) { live.droppedFrames += 1; await reportClientMetrics(); return; }
       const result = await control("advance", true);
       if (result && result.lifecycle !== "running") stop();
     }, Math.max(40, 1000 / rate));
@@ -137,4 +151,11 @@
 
   new MutationObserver(attach).observe(document.documentElement, {childList: true, subtree: true});
   document.addEventListener("DOMContentLoaded", attach);
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible" || !live.sessionId) return;
+    try {
+      const payload = await api(`/api/simulations/${live.sessionId}`, {method: "GET", headers: {}});
+      live.reconnects += 1; render(payload, false); await reportClientMetrics();
+    } catch (_) { /* the lease UI reports the next control failure */ }
+  });
 })();

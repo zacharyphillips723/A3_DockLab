@@ -152,11 +152,16 @@ The credibility-first physics work and interpretation limits are documented in
 
 Physics Credibility and Phases A-C are complete, including rendezvous/control,
 attitude and docking-port dynamics, controller handoff, EKF estimation, and
-reproducible Monte Carlo risk analysis. Interactive Milestones 1-4 are complete.
-Milestone 5 is complete: Lakebase-backed ownership, expiring control leases,
+reproducible Monte Carlo risk analysis. Interactive Milestones 1-7 are complete.
+The product includes Live, Replay, Risk, Compare, and Review workspaces plus
+operational telemetry, resource quotas, retention cleanup, security/dependency
+checks, and documented deployment and rollback gates. Milestone 5's
+Lakebase-backed ownership, expiring control leases,
 idempotent commands, optimistic concurrency, versioned engine checkpoints,
 cross-instance restart recovery, asynchronous Delta materialization, and
-MLflow completion lineage are implemented behind the workspace smoke gate.
+MLflow completion lineage are implemented behind the workspace smoke gate. The
+code-level Milestone 7 gates pass locally; each target workspace still runs the
+documented smoke and rollback exercise as release evidence.
 
 The DAB packages the Databricks App, Lakebase database, SQL warehouse binding,
 serverless simulation and Monte Carlo Jobs, MLflow experiment, and dev/prod

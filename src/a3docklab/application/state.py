@@ -570,6 +570,43 @@ class ApplicationStateStore:
             raise RuntimeError("idempotency key reused with different payload")
         return saved
 
+    def cleanup_terminal_sessions(self, older_than_utc: datetime) -> int:
+        """Remove expired terminal sessions and their command projection atomically."""
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    "SELECT session_id FROM simulation_sessions WHERE status IN ('complete', 'terminated') "
+                    f"AND updated_at_utc < {self.placeholder}",
+                    (older_than_utc.isoformat(),),
+                )
+                session_ids = [str(row[0]) for row in cursor.fetchall()]
+                for session_id in session_ids:
+                    cursor.execute(
+                        f"DELETE FROM accepted_commands WHERE session_id = {self.placeholder}",
+                        (session_id,),
+                    )
+                    cursor.execute(
+                        f"DELETE FROM simulation_sessions WHERE session_id = {self.placeholder}",
+                        (session_id,),
+                    )
+                connection.commit()
+                return len(session_ids)
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
+
+    def count_expired_terminal_sessions(self, older_than_utc: datetime) -> int:
+        rows = self._execute(
+            "SELECT COUNT(*) FROM simulation_sessions WHERE status IN ('complete', 'terminated') "
+            f"AND updated_at_utc < {self.placeholder}",
+            (older_than_utc.isoformat(),),
+            fetch=True,
+        )
+        return int(rows[0][0])
+
 
 def hash_lease_token(token: str) -> str:
     """Return the non-reversible representation persisted for a session lease."""
