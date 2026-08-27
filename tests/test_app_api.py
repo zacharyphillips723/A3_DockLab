@@ -58,6 +58,63 @@ def test_app_health_and_annotation_round_trip(tmp_path: Path) -> None:
     restored = client.get("/api/comparisons", headers={"X-Forwarded-Email": "operator@example.com"})
     assert restored.json == [comparison.json]
 
+    view = client.post(
+        "/api/views",
+        json={
+            "name": "Capture window",
+            "run_id": "run-1",
+            "start_time_ns": 10,
+            "end_time_ns": 100,
+            "channels": ["range_m", "closing_rate_m_s"],
+        },
+        headers={"X-Forwarded-Email": "operator@example.com"},
+    )
+    assert view.status_code == 201
+    assert client.get(
+        "/api/views", headers={"X-Forwarded-Email": "operator@example.com"}
+    ).json == [view.json]
+
+    review = client.post(
+        "/api/reviews",
+        json={"run_id": "run-1", "status": "approved", "notes": "Evidence verified"},
+        headers={"X-Forwarded-Email": "operator@example.com"},
+    )
+    assert review.status_code == 201
+    assert client.get("/api/reviews", query_string={"run_id": "run-1"}).json == [review.json]
+    history = client.get("/api/reviews/history", query_string={"run_id": "run-1"})
+    assert history.status_code == 200
+    assert history.json[0]["status"] == "approved"
+    audit = client.get(
+        "/api/reviews/audit",
+        query_string={"run_id": "run-1"},
+        headers={"X-Forwarded-Email": "operator@example.com"},
+    )
+    assert audit.status_code == 200
+    assert audit.json["run_id"] == "run-1"
+    assert audit.json["annotations"] == [created.json]
+    assert audit.json["saved_views"] == [view.json]
+    assert audit.json["current_reviews"] == [review.json]
+    assert len(audit.json["review_history"]) == 1
+    assert "attachment" in audit.headers["Content-Disposition"]
+
+
+def test_review_api_validates_ranges_and_status(tmp_path: Path) -> None:
+    store = ApplicationStateStore(lambda: sqlite3.connect(tmp_path / "app.db"), "?")
+    store.initialize()
+    server = Flask(__name__)
+    register_state_routes(server, lambda: store)
+    client = server.test_client()
+
+    invalid_view = client.post(
+        "/api/views",
+        json={"name": "Bad", "run_id": "run-1", "start_time_ns": 20, "end_time_ns": 10},
+    )
+    assert invalid_view.status_code == 400
+    invalid_review = client.post(
+        "/api/reviews", json={"run_id": "run-1", "status": "not-a-status"}
+    )
+    assert invalid_review.status_code == 400
+
 
 def test_app_reports_unavailable_state() -> None:
     server = Flask(__name__)

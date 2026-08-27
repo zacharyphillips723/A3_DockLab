@@ -109,9 +109,22 @@ annotation, approval, and immutable view-state history.
   migration. The HTTP API validates saved specs and derives owner identity from
   the Databricks forwarded user header.
 
-The remaining Milestone 6 work is the Review workspace: pinned annotations,
-saved replay views, approval/rejection controls, immutable history, audit
-export, and shareable reproducible view links. Milestone 7 then closes with
+## Review workspace slice
+
+- Reviewers can pin attributed annotations to exact mission times and see them
+  as evidence markers on the run timeline.
+- Owner-scoped saved views retain run identity, time window, and selected
+  channels, and can be restored without relying on mutable display names.
+- Pending, in-review, approved, and rejected dispositions update a current
+  projection while every transition is appended to immutable attributed
+  history in the same transaction.
+- Deep links restore the Review workspace and selected immutable run. A
+  versioned JSON audit package exports annotations, views, current review state,
+  and the complete transition history.
+- Plotly's built-in camera export remains available for replay and review
+  snapshots without adding a server-side renderer.
+
+Milestone 6 is now feature-complete. Milestone 7 closes with
 observability/service targets, quotas and cleanup, load/soak/recovery tests,
 security review, and deployment/rollback exercises.
 
