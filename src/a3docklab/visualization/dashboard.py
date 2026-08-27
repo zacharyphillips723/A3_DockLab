@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote
@@ -13,7 +14,12 @@ import pandas as pd
 from a3docklab.analysis.comparison import ComparisonResult, compare_runs, parse_schema_mapping
 from a3docklab.analysis.contracts import AnalysisBudget
 from a3docklab.analysis.risk import RiskQueryResult, RiskSampleMaterializer, RiskStore
-from a3docklab.application.state import ApplicationStateStore, new_comparison
+from a3docklab.application.state import (
+    ApplicationStateStore,
+    RunReview,
+    new_comparison,
+    new_saved_view,
+)
 from a3docklab.telemetry.contracts import BundleManifest
 from a3docklab.visualization.replay import ReplayStore
 
@@ -603,7 +609,7 @@ def create_app(
 ) -> Any:
     try:
         import plotly.graph_objects as go  # type: ignore[import-untyped]
-        from dash import Dash, Input, Output, State, dcc, html
+        from dash import Dash, Input, Output, State, ctx, dcc, html
     except ImportError as exc:
         raise RuntimeError("The replay application requires the 'ui' optional dependency") from exc
 
@@ -1001,6 +1007,87 @@ def create_app(
             html.Div(id="compare-provenance", className="provenance-card"),
         ]
     )
+    review_layout = html.Div(
+        [
+            html.H2("Review Workspace"),
+            html.P(
+                "Pin evidence to the mission timeline, restore reproducible views, and record an auditable disposition."
+            ),
+            dcc.Dropdown(
+                id="review-run",
+                options=run_options,
+                value=runs[0].run_id if runs else None,
+                placeholder="Select a run",
+            ),
+            html.Div(
+                [
+                    dcc.Input(id="review-annotation-time", type="number", min=0, step=0.1, placeholder="Time (s)"),
+                    dcc.Input(id="review-annotation-text", placeholder="Annotation evidence"),
+                    html.Button("Pin annotation", id="review-annotation-save", disabled=application_state is None),
+                ],
+                className="review-controls",
+            ),
+            html.Div(id="review-annotation-status", className="muted"),
+            dcc.Graph(id="review-timeline"),
+            html.H3("Saved replay view"),
+            html.Div(
+                [
+                    dcc.Input(id="review-view-name", placeholder="View name"),
+                    dcc.Input(id="review-view-start", type="number", min=0, step=0.1, placeholder="Start (s)"),
+                    dcc.Input(id="review-view-end", type="number", min=0, step=0.1, placeholder="End (s)"),
+                    dcc.Dropdown(
+                        id="review-view-channels",
+                        options=[
+                            {"label": "Range", "value": "range_m"},
+                            {"label": "Closing rate", "value": "closing_rate_m_s"},
+                            {"label": "Propellant", "value": "propellant_used_kg"},
+                            {"label": "Safety margins", "value": "safety_margins"},
+                        ],
+                        value=["range_m", "closing_rate_m_s"],
+                        multi=True,
+                        placeholder="Visible channels",
+                    ),
+                    html.Button("Save view", id="review-view-save", disabled=application_state is None),
+                    dcc.Dropdown(id="review-view-saved", placeholder="Restore saved view"),
+                ],
+                className="review-controls",
+            ),
+            html.Div(id="review-view-status", className="muted"),
+            html.H3("Disposition"),
+            html.Div(
+                [
+                    dcc.Dropdown(
+                        id="review-status",
+                        options=[
+                            {"label": label, "value": value}
+                            for value, label in (
+                                ("pending", "Pending"),
+                                ("in_review", "In review"),
+                                ("approved", "Approved"),
+                                ("rejected", "Rejected"),
+                            )
+                        ],
+                        value="in_review",
+                        clearable=False,
+                    ),
+                    dcc.Textarea(id="review-notes", placeholder="Review rationale"),
+                    html.Button("Record disposition", id="review-save", disabled=application_state is None),
+                ],
+                className="review-controls",
+            ),
+            html.Div(id="review-status-message", className="muted"),
+            html.Div(id="review-current"),
+            html.H3("Immutable review history"),
+            html.Div(id="review-history"),
+            html.Div(
+                [
+                    html.A("Download audit package", id="review-audit-link", target="_blank"),
+                    html.A("Share this view", id="review-share-link"),
+                ],
+                className="review-actions",
+            ),
+        ]
+    )
     app.layout = html.Main(
         [
             dcc.Location(id="workspace-location", refresh="callback-nav"),
@@ -1018,6 +1105,7 @@ def create_app(
                     dcc.Tab(label="Replay", value="replay", children=replay_layout),
                     dcc.Tab(label="Risk", value="risk", children=risk_layout),
                     dcc.Tab(label="Compare", value="compare", children=compare_layout),
+                    dcc.Tab(label="Review", value="review", children=review_layout),
                 ],
             ),
         ],
@@ -1101,25 +1189,27 @@ def create_app(
         Output("workspace-tabs", "value"),
         Output("run-selector", "value"),
         Output("run-selector", "options"),
+        Output("review-run", "value"),
         Input("workspace-location", "search"),
     )
-    def restore_workspace_link(search: str | None) -> tuple[str, Any, list[dict[str, str]]]:
+    def restore_workspace_link(search: str | None) -> tuple[str, Any, list[dict[str, str]], Any]:
         query = parse_qs((search or "").lstrip("?"))
         workspace = query.get("workspace", ["live"])[0]
-        if workspace not in {"live", "replay", "risk", "compare"}:
+        if workspace not in {"live", "replay", "risk", "compare", "review"}:
             workspace = "live"
         available_runs = store.list_runs()
         requested_run = query.get("run_id", [None])[0]
         valid_run = (
             requested_run if requested_run in {run.run_id for run in available_runs} else None
         )
-        if workspace == "replay" and valid_run is None and available_runs:
+        if workspace in {"replay", "review"} and valid_run is None and available_runs:
             valid_run = available_runs[0].run_id
         options = [
             {"label": f"{run.scenario_id} · {run.run_id[-12:]}", "value": run.run_id}
             for run in available_runs
         ]
-        return workspace, valid_run, options
+        review_run = valid_run if workspace == "review" else (available_runs[0].run_id if available_runs else None)
+        return workspace, valid_run, options, review_run
 
     @app.callback(
         Output("risk-materialization-status", "children"),
@@ -1248,6 +1338,168 @@ def create_app(
             record.candidate_run_id,
             record.alignment,
             json.dumps(spec.get("schema_mapping", {}), indent=2, sort_keys=True),
+        )
+
+    def review_table(records: list[Any], history: bool = False) -> Any:
+        if not records:
+            return html.P("No review records yet.", className="muted")
+        headers = ["Reviewer", "Previous", "Status", "Notes", "Recorded"] if history else [
+            "Reviewer", "Status", "Notes", "Updated"
+        ]
+        rows = []
+        for record in records:
+            values = [record.reviewer]
+            if history:
+                values.append(record.previous_status or "—")
+            values.extend(
+                [
+                    record.status.replace("_", " ").title(),
+                    record.notes or "—",
+                    (record.recorded_at_utc if history else record.updated_at_utc).isoformat(),
+                ]
+            )
+            rows.append(html.Tr([html.Td(value) for value in values]))
+        return html.Table(
+            [html.Thead(html.Tr([html.Th(value) for value in headers])), html.Tbody(rows)],
+            className="outlier-table",
+        )
+
+    @app.callback(
+        Output("review-timeline", "figure"),
+        Output("review-annotation-status", "children"),
+        Output("review-view-status", "children"),
+        Output("review-status-message", "children"),
+        Output("review-current", "children"),
+        Output("review-history", "children"),
+        Output("review-audit-link", "href"),
+        Output("review-share-link", "href"),
+        Output("review-view-saved", "options"),
+        Input("review-run", "value"),
+        Input("review-annotation-save", "n_clicks"),
+        Input("review-view-save", "n_clicks"),
+        Input("review-save", "n_clicks"),
+        State("review-annotation-time", "value"),
+        State("review-annotation-text", "value"),
+        State("review-view-name", "value"),
+        State("review-view-start", "value"),
+        State("review-view-end", "value"),
+        State("review-view-channels", "value"),
+        State("review-status", "value"),
+        State("review-notes", "value"),
+    )
+    def configure_review(
+        run_id: str | None,
+        _: int,
+        __: int,
+        ___: int,
+        annotation_time: float | None,
+        annotation_text: str | None,
+        view_name: str | None,
+        view_start: float | None,
+        view_end: float | None,
+        view_channels: list[str] | None,
+        status: str,
+        notes: str | None,
+    ) -> tuple[Any, ...]:
+        empty = go.Figure().update_layout(template="plotly_dark", uirevision="review-empty")
+        if run_id is None:
+            return empty, "", "", "Select a run.", "", "", "", "", []
+        annotation_message = ""
+        view_message = ""
+        review_message = ""
+        if application_state is not None:
+            from flask import request
+
+            owner = request.headers.get("X-Forwarded-Email", "local-operator")
+            if ctx.triggered_id == "review-annotation-save":
+                if annotation_text:
+                    application_state.add_annotation(
+                        run_id,
+                        owner,
+                        annotation_text,
+                        int(annotation_time * 1e9) if annotation_time is not None else None,
+                    )
+                    annotation_message = "Annotation pinned to the immutable run."
+                else:
+                    annotation_message = "Enter annotation evidence first."
+            elif ctx.triggered_id == "review-view-save":
+                if not view_name:
+                    view_message = "Enter a view name first."
+                elif view_start is not None and view_end is not None and view_start > view_end:
+                    view_message = "View start must not exceed its end."
+                else:
+                    application_state.save_view(
+                        new_saved_view(
+                            owner,
+                            view_name,
+                            run_id,
+                            start_time_ns=int(view_start * 1e9) if view_start is not None else None,
+                            end_time_ns=int(view_end * 1e9) if view_end is not None else None,
+                            channels=tuple(view_channels or ()),
+                        )
+                    )
+                    view_message = f"Saved reproducible view “{view_name}”."
+            elif ctx.triggered_id == "review-save":
+                application_state.upsert_review(
+                    RunReview(
+                        run_id=run_id,
+                        reviewer=owner,
+                        status=status,  # type: ignore[arg-type]
+                        notes=notes or "",
+                        updated_at_utc=datetime.now(UTC),
+                    )
+                )
+                review_message = f"Recorded {status.replace('_', ' ')} disposition."
+            annotations = application_state.list_annotations(run_id)
+            reviews = application_state.get_reviews(run_id)
+            history = application_state.get_review_history(run_id)
+            views = [item for item in application_state.list_views(owner) if item.run_id == run_id]
+        else:
+            annotations, reviews, history, views = [], [], [], []
+            review_message = "Lakebase application state is unavailable."
+        manifest = next(item for item in store.list_runs() if item.run_id == run_id)
+        payload, _events = load_replay_payload(store, manifest)
+        figure = _timeline_figure(go, payload)
+        for annotation in annotations:
+            if annotation.event_time_ns is not None:
+                time_s = annotation.event_time_ns / 1e9
+                figure.add_vline(
+                    x=time_s,
+                    line_color="#ffcf5c",
+                    line_dash="dot",
+                    annotation_text=annotation.text,
+                    annotation_position="top",
+                )
+        return (
+            figure,
+            annotation_message,
+            view_message,
+            review_message,
+            review_table(reviews),
+            review_table(history, history=True),
+            f"/api/reviews/audit?run_id={quote(run_id)}",
+            f"/?workspace=review&run_id={quote(run_id)}",
+            [{"label": item.name, "value": item.view_id} for item in views],
+        )
+
+    @app.callback(
+        Output("review-view-start", "value"),
+        Output("review-view-end", "value"),
+        Output("review-view-channels", "value"),
+        Input("review-view-saved", "value"),
+        prevent_initial_call=True,
+    )
+    def restore_review_view(view_id: str | None) -> tuple[Any, Any, list[str]]:
+        if view_id is None or application_state is None:
+            return None, None, []
+        from flask import request
+
+        owner = request.headers.get("X-Forwarded-Email", "local-operator")
+        view = next(item for item in application_state.list_views(owner) if item.view_id == view_id)
+        return (
+            view.start_time_ns / 1e9 if view.start_time_ns is not None else None,
+            view.end_time_ns / 1e9 if view.end_time_ns is not None else None,
+            list(view.channels),
         )
 
     app.clientside_callback(

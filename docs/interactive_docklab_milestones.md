@@ -173,9 +173,9 @@ the physics core portable and locally testable.
 
 ## Milestone 6 — Risk, comparison, and review workspace
 
-**Status:** In progress jointly with Milestone 7. Versioned artifact,
-schema-aware comparison, reproducible review, bounded-query, and immutable
-review-history foundations are implemented first.
+**Status:** Complete. Risk, comparison, saved reproducible review, pinned
+annotation, disposition history, audit export, and deep-link workflows are
+implemented against local or Databricks-backed storage contracts.
 
 ### Goal
 
