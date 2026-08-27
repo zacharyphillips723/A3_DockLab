@@ -75,6 +75,26 @@ rather than receiving those controls afterward.
   through `DeltaRunStorage`. The App service principal receives only the
   corresponding `CAN_MANAGE_RUN` job resource permission.
 
+## Compare workspace slice
+
+- A storage-neutral comparison service uses the same local/Delta `ReplayStore`
+  contract and retains both run IDs, schema versions, configuration hashes, and
+  source locations in a validated `ComparisonSpec`.
+- Event-time alignment uses only the declared overlap interval. Mission-phase
+  alignment compares shared phase progress explicitly; runs with no common
+  interval or phase fail rather than producing misleading plots.
+- The Compare tab overlays both 3D trajectories and aligned range, closing
+  rate, keep-out margin, and corridor margin. It reports candidate-minus-
+  baseline deltas for duration, closest approach, closing rate, propellant,
+  safety violations, and command-source transitions.
+- Schema mismatches require a candidate-to-baseline JSON channel mapping.
+  Row, trace-point, and timeout budgets are enforced before results render.
+
+The next Compare slice is persisted `SavedComparison` state plus richer command,
+policy-version, safety-intervention, and event-level diff tables. That slice
+joins naturally with the Review workspace because saved comparisons need actor,
+annotation, approval, and immutable view-state history.
+
 ## Combined acceptance gate
 
 - Every displayed result resolves to immutable stored artifacts and config.

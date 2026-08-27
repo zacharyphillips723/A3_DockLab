@@ -32,5 +32,11 @@ header span { color: #91a4c6; }
 .outlier-table th { color: #91a4c6; font-size: .78rem; text-transform: uppercase; }
 .outlier-table a { color: var(--cyan); }
 .muted { color: #7586a5; }
+.compare-controls { display: grid; grid-template-columns: 1fr 1fr minmax(180px, .5fr); gap: 12px; margin: 12px 0; }
+.compare-controls label { display: block; color: #aebddb; margin-bottom: 6px; }
+.schema-mapping { width: 100%; min-height: 70px; box-sizing: border-box; margin: 6px 0 10px; background: #0b1220; color: #dffaff; border: 1px solid #34445f; border-radius: 7px; padding: 9px; }
+.compare-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.comparison-error { color: #ff9cad; min-height: 24px; margin-top: 8px; }
 @media (max-width: 820px) { .live-grid { grid-template-columns: 1fr; } .live-controls { position: static; } .live-readouts { grid-template-columns: 1fr; } header { display: block; } }
 @media (max-width: 820px) { .risk-chart-grid { grid-template-columns: 1fr; } .risk-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 820px) { .compare-controls { grid-template-columns: 1fr; } .compare-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
