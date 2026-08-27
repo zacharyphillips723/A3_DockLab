@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 
@@ -5,6 +6,15 @@ from flask import Flask
 
 from a3docklab.application.api import register_state_routes
 from a3docklab.application.state import ApplicationStateStore
+
+
+def _artifact(run_id: str) -> dict[str, str]:
+    return {
+        "run_id": run_id,
+        "schema_version": "3.0",
+        "configuration_hash": f"hash-{run_id}",
+        "source_uri": f"delta://truth/{run_id}",
+    }
 
 
 def test_app_health_and_annotation_round_trip(tmp_path: Path) -> None:
@@ -27,6 +37,26 @@ def test_app_health_and_annotation_round_trip(tmp_path: Path) -> None:
     listed = client.get("/api/annotations", query_string={"run_id": "run-1"})
     assert listed.status_code == 200
     assert listed.json == [created.json]
+
+    comparison_spec = {
+        "baseline": _artifact("run-1"),
+        "candidate": _artifact("run-2"),
+        "alignment": "mission_phase",
+    }
+    comparison = client.post(
+        "/api/comparisons",
+        json={
+            "name": "Nominal vs candidate",
+            "baseline_run_id": "run-1",
+            "candidate_run_id": "run-2",
+            "alignment": "mission_phase",
+            "comparison_spec_json": json.dumps(comparison_spec),
+        },
+        headers={"X-Forwarded-Email": "operator@example.com"},
+    )
+    assert comparison.status_code == 201
+    restored = client.get("/api/comparisons", headers={"X-Forwarded-Email": "operator@example.com"})
+    assert restored.json == [comparison.json]
 
 
 def test_app_reports_unavailable_state() -> None:

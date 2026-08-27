@@ -52,10 +52,18 @@ def test_application_state_round_trip(tmp_path: Path) -> None:
     assert history[0].status == "approved"
 
     comparison = new_comparison(
-        "operator@example.com", "Nominal vs fault", "run-1", "run-2", "mission_phase"
+        "operator@example.com",
+        "Nominal vs fault",
+        "run-1",
+        "run-2",
+        "mission_phase",
+        '{"schema_version":"1.0"}',
     )
     store.save_comparison(comparison)
     assert store.list_comparisons("operator@example.com") == [comparison]
+    assert store.list_comparisons("operator@example.com")[0].comparison_spec_json == (
+        '{"schema_version":"1.0"}'
+    )
 
 
 def test_application_state_is_owner_and_run_scoped(tmp_path: Path) -> None:
@@ -67,6 +75,37 @@ def test_application_state_is_owner_and_run_scoped(tmp_path: Path) -> None:
 
     assert [item.text for item in store.list_annotations("run-a")] == ["A"]
     assert [item.name for item in store.list_views("a@example.com")] == ["A view"]
+
+
+def test_saved_comparison_schema_migrates_without_losing_existing_rows(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """CREATE TABLE saved_comparisons (
+        comparison_id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,
+        baseline_run_id TEXT NOT NULL, candidate_run_id TEXT NOT NULL,
+        alignment TEXT NOT NULL, updated_at_utc TEXT NOT NULL)"""
+    )
+    connection.execute(
+        "INSERT INTO saved_comparisons VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "legacy-1",
+            "owner@example.com",
+            "Legacy",
+            "run-a",
+            "run-b",
+            "event_time",
+            datetime(2026, 8, 27, tzinfo=UTC).isoformat(),
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    store = _store(path)
+    restored = store.list_comparisons("owner@example.com")
+
+    assert restored[0].comparison_id == "legacy-1"
+    assert restored[0].comparison_spec_json == "{}"
 
 
 def test_review_updates_preserve_immutable_attributed_history(tmp_path: Path) -> None:

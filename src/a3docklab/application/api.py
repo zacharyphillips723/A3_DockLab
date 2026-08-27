@@ -7,13 +7,14 @@ from typing import Any
 
 from flask import jsonify, request
 
+from a3docklab.analysis.contracts import ComparisonSpec
 from a3docklab.application.sessions import (
     InteractiveSimulationService,
     SessionConflict,
     SessionNotFound,
     SessionUnauthorized,
 )
-from a3docklab.application.state import ApplicationStateStore
+from a3docklab.application.state import ApplicationStateStore, new_comparison
 
 
 def register_state_routes(
@@ -46,6 +47,34 @@ def register_state_routes(
             str(payload["text"]),
             int(payload["event_time_ns"]) if payload.get("event_time_ns") is not None else None,
         )
+        return jsonify(record.model_dump(mode="json")), 201
+
+    @server.route("/api/comparisons", methods=["GET", "POST"])  # type: ignore[untyped-decorator]
+    def comparisons() -> tuple[object, int]:
+        store = state_provider()
+        if store is None:
+            return jsonify({"error": "Lakebase application state is unavailable"}), 503
+        owner = request.headers.get("X-Forwarded-Email", "workspace-smoke-test")
+        if request.method == "GET":
+            records = store.list_comparisons(owner)
+            return jsonify([record.model_dump(mode="json") for record in records]), 200
+        payload = request.get_json(silent=True) or {}
+        required = ("name", "baseline_run_id", "candidate_run_id", "comparison_spec_json")
+        if any(not payload.get(field) for field in required):
+            return jsonify({"error": f"{', '.join(required)} are required"}), 400
+        try:
+            ComparisonSpec.model_validate_json(str(payload["comparison_spec_json"]))
+            record = new_comparison(
+                owner,
+                str(payload["name"]),
+                str(payload["baseline_run_id"]),
+                str(payload["candidate_run_id"]),
+                str(payload.get("alignment", "event_time")),  # type: ignore[arg-type]
+                str(payload["comparison_spec_json"]),
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        store.save_comparison(record)
         return jsonify(record.model_dump(mode="json")), 201
 
 

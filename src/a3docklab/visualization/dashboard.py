@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote
@@ -12,6 +13,7 @@ import pandas as pd
 from a3docklab.analysis.comparison import ComparisonResult, compare_runs, parse_schema_mapping
 from a3docklab.analysis.contracts import AnalysisBudget
 from a3docklab.analysis.risk import RiskQueryResult, RiskSampleMaterializer, RiskStore
+from a3docklab.application.state import ApplicationStateStore, new_comparison
 from a3docklab.telemetry.contracts import BundleManifest
 from a3docklab.visualization.replay import ReplayStore
 
@@ -572,11 +574,32 @@ def _comparison_kpis(html: Any, result: ComparisonResult) -> list[Any]:
     ]
 
 
+def _comparison_detail_table(html: Any, result: ComparisonResult) -> Any:
+    headers = ("Category", "Item", "Baseline", "Candidate", "Delta")
+    rows = [
+        html.Tr(
+            [
+                html.Td(str(row["category"])),
+                html.Td(str(row["item"])),
+                html.Td(str(int(row["baseline_count"]))),
+                html.Td(str(int(row["candidate_count"]))),
+                html.Td(f"{int(row['delta']):+d}"),
+            ]
+        )
+        for _, row in result.detail_diffs.iterrows()
+    ]
+    return html.Table(
+        [html.Thead(html.Tr([html.Th(item) for item in headers])), html.Tbody(rows)],
+        className="outlier-table",
+    )
+
+
 def create_app(
     store: ReplayStore,
     live_scenarios: list[dict[str, str]] | None = None,
     risk_store: RiskStore | None = None,
     risk_materializer: RiskSampleMaterializer | None = None,
+    application_state: ApplicationStateStore | None = None,
 ) -> Any:
     try:
         import plotly.graph_objects as go  # type: ignore[import-untyped]
@@ -953,6 +976,19 @@ def create_app(
             ),
             dcc.Textarea(id="compare-schema-mapping", value="{}", className="schema-mapping"),
             html.Button("Compare runs", id="compare-submit", className="primary-control"),
+            html.Div(
+                [
+                    dcc.Input(id="compare-save-name", placeholder="Comparison name"),
+                    html.Button(
+                        "Save comparison",
+                        id="compare-save",
+                        disabled=application_state is None,
+                    ),
+                    dcc.Dropdown(id="compare-saved", placeholder="Restore saved comparison"),
+                ],
+                className="compare-save-controls",
+            ),
+            html.Div(id="compare-save-status", className="muted"),
             html.Div(id="compare-error", className="comparison-error"),
             html.Div(id="compare-kpis", className="kpi-strip compare-kpis"),
             dcc.Graph(id="compare-trajectory"),
@@ -960,6 +996,8 @@ def create_app(
                 [dcc.Graph(id="compare-timeline"), dcc.Graph(id="compare-safety")],
                 className="risk-chart-grid",
             ),
+            html.H3("Command, policy, event, and safety differences"),
+            html.Div(id="compare-details"),
             html.Div(id="compare-provenance", className="provenance-card"),
         ]
     )
@@ -968,6 +1006,7 @@ def create_app(
             dcc.Location(id="workspace-location", refresh="callback-nav"),
             dcc.Store(id="replay-data"),
             dcc.Store(id="client-clock"),
+            dcc.Store(id="compare-spec"),
             html.Header(
                 [html.H1("A3 DockLab"), html.Span("Interactive rendezvous & docking laboratory")]
             ),
@@ -1105,6 +1144,8 @@ def create_app(
         Output("compare-safety", "figure"),
         Output("compare-provenance", "children"),
         Output("compare-error", "children"),
+        Output("compare-details", "children"),
+        Output("compare-spec", "data"),
         Input("compare-submit", "n_clicks"),
         State("compare-baseline", "value"),
         State("compare-candidate", "value"),
@@ -1120,7 +1161,7 @@ def create_app(
     ) -> tuple[Any, ...]:
         empty = go.Figure().update_layout(template="plotly_dark", uirevision="compare-empty")
         if baseline_id is None or candidate_id is None:
-            return [], empty, empty, empty, "", "Select both runs."
+            return [], empty, empty, empty, "", "Select both runs.", "", None
         manifests = {run.run_id: run for run in store.list_runs()}
         try:
             result = compare_runs(
@@ -1132,7 +1173,7 @@ def create_app(
                 budget=AnalysisBudget(max_rows=250_000, max_points_per_trace=10_000, timeout_s=30),
             )
         except (KeyError, ValueError, TimeoutError) as exc:
-            return [], empty, empty, empty, "", str(exc)
+            return [], empty, empty, empty, "", str(exc), "", None
         figures = _comparison_figures(go, result)
         provenance = (
             f"Baseline {result.baseline_manifest.run_id} ({result.baseline_manifest.configuration_hash[:12]}) · "
@@ -1140,7 +1181,74 @@ def create_app(
             f"{result.spec.alignment} · overlap {result.overlap_duration_s:.1f} s · "
             f"{result.rows_scanned:,} rows · {result.query_latency_ms:.1f} ms"
         )
-        return _comparison_kpis(html, result), *figures, provenance, ""
+        return (
+            _comparison_kpis(html, result),
+            *figures,
+            provenance,
+            "",
+            _comparison_detail_table(html, result),
+            result.spec.model_dump(mode="json"),
+        )
+
+    @app.callback(
+        Output("compare-save-status", "children"),
+        Output("compare-saved", "options"),
+        Input("compare-save", "n_clicks"),
+        State("compare-save-name", "value"),
+        State("compare-spec", "data"),
+        prevent_initial_call=True,
+    )
+    def save_comparison(
+        _: int, name: str | None, spec_data: dict[str, Any] | None
+    ) -> tuple[str, list[dict[str, str]]]:
+        if application_state is None:
+            return "Lakebase application state is unavailable.", []
+        from flask import request
+
+        owner = request.headers.get("X-Forwarded-Email", "local-operator")
+        if not name or spec_data is None:
+            return "Run a comparison and provide a name first.", []
+        record = new_comparison(
+            owner,
+            name,
+            str(spec_data["baseline"]["run_id"]),
+            str(spec_data["candidate"]["run_id"]),
+            str(spec_data["alignment"]),  # type: ignore[arg-type]
+            json.dumps(spec_data, sort_keys=True, separators=(",", ":")),
+        )
+        application_state.save_comparison(record)
+        options = [
+            {"label": item.name, "value": item.comparison_id}
+            for item in application_state.list_comparisons(owner)
+        ]
+        return f"Saved “{name}” with immutable artifact references.", options
+
+    @app.callback(
+        Output("compare-baseline", "value"),
+        Output("compare-candidate", "value"),
+        Output("compare-alignment", "value"),
+        Output("compare-schema-mapping", "value"),
+        Input("compare-saved", "value"),
+        prevent_initial_call=True,
+    )
+    def restore_comparison(comparison_id: str | None) -> tuple[Any, ...]:
+        if comparison_id is None or application_state is None:
+            return None, None, "event_time", "{}"
+        from flask import request
+
+        owner = request.headers.get("X-Forwarded-Email", "local-operator")
+        record = next(
+            item
+            for item in application_state.list_comparisons(owner)
+            if item.comparison_id == comparison_id
+        )
+        spec = json.loads(record.comparison_spec_json)
+        return (
+            record.baseline_run_id,
+            record.candidate_run_id,
+            record.alignment,
+            json.dumps(spec.get("schema_mapping", {}), indent=2, sort_keys=True),
+        )
 
     app.clientside_callback(
         """function(clicks) { const playing = (clicks || 0) % 2 === 1; return [!playing, playing ? 'Pause' : 'Play']; }""",

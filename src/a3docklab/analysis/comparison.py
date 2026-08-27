@@ -24,6 +24,7 @@ class ComparisonResult:
     candidate: pd.DataFrame
     aligned: pd.DataFrame
     kpi_deltas: dict[str, float | int | str]
+    detail_diffs: pd.DataFrame
     query_latency_ms: float
     rows_scanned: int
     overlap_duration_s: float
@@ -156,6 +157,58 @@ def _kpis(baseline: pd.DataFrame, candidate: pd.DataFrame) -> dict[str, float | 
     return output
 
 
+def _detail_diffs(
+    baseline: pd.DataFrame,
+    candidate: pd.DataFrame,
+    baseline_events: pd.DataFrame,
+    candidate_events: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+
+    def add_counts(category: str, left: pd.Series, right: pd.Series) -> None:
+        left_counts = left.astype(str).value_counts()
+        right_counts = right.astype(str).value_counts()
+        for item in sorted(set(left_counts.index) | set(right_counts.index)):
+            baseline_count = int(left_counts.get(item, 0))
+            candidate_count = int(right_counts.get(item, 0))
+            rows.append(
+                {
+                    "category": category,
+                    "item": item,
+                    "baseline_count": baseline_count,
+                    "candidate_count": candidate_count,
+                    "delta": candidate_count - baseline_count,
+                }
+            )
+
+    for column, category in (
+        ("command_source", "Command source samples"),
+        ("controller_authority", "Controller authority samples"),
+        ("policy_id", "Policy samples"),
+        ("policy_version", "Policy version samples"),
+    ):
+        if column in baseline and column in candidate:
+            add_counts(category, baseline[column], candidate[column])
+    if "event_type" in baseline_events and "event_type" in candidate_events:
+        add_counts("Mission events", baseline_events["event_type"], candidate_events["event_type"])
+    for margin, label in (
+        ("keep_out_margin_m", "Keep-out violations"),
+        ("corridor_margin_m", "Corridor violations"),
+    ):
+        left = int((baseline[margin] < 0).sum())
+        right = int((candidate[margin] < 0).sum())
+        rows.append(
+            {
+                "category": "Safety",
+                "item": label,
+                "baseline_count": left,
+                "candidate_count": right,
+                "delta": right - left,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def compare_runs(
     store: ReplayStore,
     baseline_manifest: BundleManifest,
@@ -178,7 +231,23 @@ def compare_runs(
     max_points = budget.max_points_per_trace
     baseline = store.query_stream(baseline_manifest.run_id, "truth", max_points=max_points)
     candidate = store.query_stream(candidate_manifest.run_id, "truth", max_points=max_points)
-    rows_scanned = len(baseline) + len(candidate)
+    baseline_event_stream = next(
+        (stream for stream in baseline_manifest.streams if stream.name == "events"), None
+    )
+    candidate_event_stream = next(
+        (stream for stream in candidate_manifest.streams if stream.name == "events"), None
+    )
+    baseline_events = (
+        store.query_stream(baseline_manifest.run_id, "events", max_points=max_points)
+        if baseline_event_stream is not None and baseline_event_stream.row_count
+        else pd.DataFrame()
+    )
+    candidate_events = (
+        store.query_stream(candidate_manifest.run_id, "events", max_points=max_points)
+        if candidate_event_stream is not None and candidate_event_stream.row_count
+        else pd.DataFrame()
+    )
+    rows_scanned = len(baseline) + len(candidate) + len(baseline_events) + len(candidate_events)
     if rows_scanned > budget.max_rows:
         raise ValueError(
             f"comparison requires {rows_scanned:,} rows; budget permits {budget.max_rows:,}"
@@ -216,6 +285,7 @@ def compare_runs(
         candidate,
         aligned,
         _kpis(baseline, candidate),
+        _detail_diffs(baseline, candidate, baseline_events, candidate_events),
         elapsed * 1000,
         rows_scanned,
         overlap,

@@ -58,6 +58,7 @@ class SavedComparison(BaseModel):
     baseline_run_id: str
     candidate_run_id: str
     alignment: Literal["event_time", "mission_phase"] = "event_time"
+    comparison_spec_json: str = "{}"
     updated_at_utc: datetime
 
 
@@ -164,7 +165,8 @@ class ApplicationStateStore:
             """CREATE TABLE IF NOT EXISTS saved_comparisons (
                 comparison_id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,
                 baseline_run_id TEXT NOT NULL, candidate_run_id TEXT NOT NULL,
-                alignment TEXT NOT NULL, updated_at_utc TEXT NOT NULL)""",
+                alignment TEXT NOT NULL, comparison_spec_json TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL)""",
             """CREATE TABLE IF NOT EXISTS simulation_sessions (
                 session_id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL, owner TEXT NOT NULL,
                 status TEXT NOT NULL, version BIGINT NOT NULL, lease_holder TEXT,
@@ -178,6 +180,31 @@ class ApplicationStateStore:
         )
         for statement in statements:
             self._execute(statement)
+        self._ensure_comparison_spec_column()
+
+    def _ensure_comparison_spec_column(self) -> None:
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            try:
+                if connection.__class__.__module__.startswith("sqlite3"):
+                    cursor.execute("PRAGMA table_info(saved_comparisons)")
+                    columns = {str(row[1]) for row in cursor.fetchall()}
+                    if "comparison_spec_json" not in columns:
+                        cursor.execute(
+                            "ALTER TABLE saved_comparisons ADD COLUMN comparison_spec_json "
+                            "TEXT NOT NULL DEFAULT '{}'"
+                        )
+                else:
+                    cursor.execute(
+                        "ALTER TABLE saved_comparisons ADD COLUMN IF NOT EXISTS "
+                        "comparison_spec_json TEXT NOT NULL DEFAULT '{}'"
+                    )
+                connection.commit()
+            finally:
+                cursor.close()
+        finally:
+            connection.close()
 
     def healthcheck(self) -> bool:
         return self._execute("SELECT 1", fetch=True) == [(1,)]
@@ -342,19 +369,22 @@ class ApplicationStateStore:
         ]
 
     def save_comparison(self, comparison: SavedComparison) -> None:
-        marks = ", ".join([self.placeholder] * 7)
+        marks = ", ".join([self.placeholder] * 8)
         self._execute(
             f"INSERT INTO saved_comparisons VALUES ({marks}) ON CONFLICT (comparison_id) "
             "DO UPDATE SET owner = excluded.owner, name = excluded.name, "
             "baseline_run_id = excluded.baseline_run_id, candidate_run_id = excluded.candidate_run_id, "
-            "alignment = excluded.alignment, updated_at_utc = excluded.updated_at_utc",
+            "alignment = excluded.alignment, "
+            "comparison_spec_json = excluded.comparison_spec_json, "
+            "updated_at_utc = excluded.updated_at_utc",
             tuple(comparison.model_dump(mode="json").values()),
         )
 
     def list_comparisons(self, owner: str) -> list[SavedComparison]:
         rows = self._execute(
             f"SELECT comparison_id, owner, name, baseline_run_id, candidate_run_id, alignment, "
-            f"updated_at_utc FROM saved_comparisons WHERE owner = {self.placeholder} ORDER BY name",
+            f"comparison_spec_json, updated_at_utc FROM saved_comparisons "
+            f"WHERE owner = {self.placeholder} ORDER BY name",
             (owner,),
             fetch=True,
         )
@@ -563,6 +593,7 @@ def new_comparison(
     baseline_run_id: str,
     candidate_run_id: str,
     alignment: Literal["event_time", "mission_phase"] = "event_time",
+    comparison_spec_json: str = "{}",
 ) -> SavedComparison:
     return SavedComparison(
         comparison_id=str(uuid.uuid4()),
@@ -571,5 +602,6 @@ def new_comparison(
         baseline_run_id=baseline_run_id,
         candidate_run_id=candidate_run_id,
         alignment=alignment,
+        comparison_spec_json=comparison_spec_json,
         updated_at_utc=datetime.now(UTC),
     )
