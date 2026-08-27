@@ -128,6 +128,26 @@ Milestone 6 is now feature-complete. Milestone 7 closes with
 observability/service targets, quotas and cleanup, load/soak/recovery tests,
 security review, and deployment/rollback exercises.
 
+## Operational hardening slice
+
+- The live service enforces configurable process-wide and per-owner active
+  session quotas. Existing analysis and Job concurrency budgets remain intact.
+- `/api/operations/metrics` reports HTTP latency, session/step counts, policy
+  latency and budget violations, safety interventions, browser dropped frames
+  and reconnects, and Lakebase health latency without unbounded identifiers.
+- A transactional retention command previews or removes only expired terminal
+  session projections; immutable Lakehouse and review artifacts are retained.
+- Concurrent multi-session, quota, metrics, cleanup, checkpoint recovery,
+  idempotency, and backward-compatible migration tests cover the operational
+  gates. Weekly dependency audit and update automation cover supply-chain drift.
+- Published service targets, threat/access review, operations response,
+  deployment acceptance, additive migration, and rollback procedures are in
+  the corresponding `docs/` runbooks.
+
+Milestones 6 and 7 are implementation-complete. A target-workspace smoke and
+rollback exercise remains a release activity because it requires that
+workspace's warehouse ID, grants, and deployed resources.
+
 ## Combined acceptance gate
 
 - Every displayed result resolves to immutable stored artifacts and config.

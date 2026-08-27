@@ -14,6 +14,7 @@ from a3docklab.analysis.risk import (
 )
 from a3docklab.application.api import register_simulation_routes, register_state_routes
 from a3docklab.application.materialization import QueuedSessionMaterializer
+from a3docklab.application.operations import register_operational_routes
 from a3docklab.application.sessions import InteractiveSimulationService
 from a3docklab.application.state import ApplicationStateStore, PostgresConnectionFactory
 from a3docklab.config import load_config
@@ -87,6 +88,8 @@ simulation_service = InteractiveSimulationService(
     {path.stem: load_config(path) for path in sorted(scenario_root.glob("*.yaml"))},
     state_store=state_store,
     materializer=session_materializer,
+    max_active_sessions=int(os.getenv("A3DOCKLAB_MAX_ACTIVE_SESSIONS", "32")),
+    max_active_sessions_per_owner=int(os.getenv("A3DOCKLAB_MAX_OWNER_SESSIONS", "4")),
 )
 app = create_app(
     replay_store(),
@@ -98,6 +101,7 @@ app = create_app(
 server = app.server
 register_state_routes(server, lambda: state_store)
 register_simulation_routes(server, simulation_service)
+register_operational_routes(server, simulation_service, state_store)
 
 
 if __name__ == "__main__":

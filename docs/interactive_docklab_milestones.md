@@ -199,9 +199,10 @@ Turn live experiments into an operational digital-twin analysis workflow.
 
 ## Milestone 7 — Operational hardening
 
-**Status:** In progress jointly with Milestone 6. Resource budgets, schema
-compatibility, and append-only audit contracts are embedded in workspace
-features from their first implementation slice.
+**Status:** Complete. The release includes concurrent load and recovery tests,
+low-cardinality operational metrics, session and analysis quotas, terminal-state
+cleanup, compatibility migrations, dependency scanning, access review, service
+targets, and deployment/rollback acceptance runbooks.
 
 ### Goal
 

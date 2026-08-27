@@ -27,6 +27,12 @@ variables:
   session_artifact_volume:
     description: Managed Unity Catalog Volume for completed-session handoff artifacts.
     default: a3docklab_session_artifacts
+  max_active_sessions:
+    description: Maximum concurrent interactive sessions per App process.
+    default: "32"
+  max_owner_sessions:
+    description: Maximum concurrent interactive sessions for one workspace user.
+    default: "4"
 
 scripts:
   # Break the fresh-workspace dependency cycle: first deploy only the Lakebase

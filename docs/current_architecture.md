@@ -22,7 +22,11 @@ flowchart LR
 ```
 
 The physics engine never depends on Flask, Dash, Databricks, Lakebase, Delta,
-or MLflow. Platform adapters surround the deterministic core.
+or MLflow. Platform adapters surround the deterministic core. The application
+surface now consists of Live, Replay, Risk, Compare, and Review workspaces.
+Operational instrumentation and quota enforcement live in the application
+layer; retention cleanup and deployment/rollback procedures remain explicit
+operator actions.
 
 ## Runtime paths
 
