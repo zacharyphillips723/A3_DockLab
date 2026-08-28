@@ -34,16 +34,27 @@ The repository is intentionally an engineering research simulator, not flight so
 - Dashboard and 3D visualization architecture
 - Verification and Monte Carlo strategy
 - Interactive human and policy-driven Live Lab sessions
+- Browser-local Replay with synchronized 3D position, timelines, events,
+  safety geometry, phase-aware trails, persistent camera state, and KPI playhead
+- Risk workspace for Monte Carlo outcome distributions, convergence, contact
+  conditions, fault sensitivity, outlier ranking, and replay materialization
+- Schema-aware Compare workspace for trajectory, KPI, command, policy, event,
+  and safety-intervention differences with saved reproducible comparisons
+- Review workspace with pinned annotations, saved replay views, attributed
+  approval/rejection, immutable disposition history, deep links, and audit export
 - Durable Lakebase session ownership, expiring leases, idempotent commands,
   versioned engine checkpoints, and cross-instance restart recovery
-- Delta-backed replay and Databricks Asset Bundle deployment
+- Operational metrics, concurrent-session quotas, terminal-state retention
+  cleanup, dependency scanning, and deployment/rollback acceptance gates
+- Local filesystem development plus Delta-, Lakebase-, MLflow-, and
+  Databricks Asset Bundle-backed workspace deployment
 
 ## Quick start
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-pip install -e ".[dev]"
+pip install -e ".[dev,ui,storage]"
 pytest
 python -m a3docklab.cli simulate configs/scenarios/blue_moon_side.yaml --output runs
 python -m a3docklab.cli telemetry configs/scenarios/blue_moon_side.yaml --output bundles
@@ -64,6 +75,24 @@ Each run is written as a portable bundle containing `telemetry.csv`,
 hash, random seed, mission-source revision, and the complete assumption
 manifest used by the run.
 
+## Application workspaces
+
+The Dash application is organized around five workflows:
+
+| Workspace | Purpose |
+|---|---|
+| **Live Lab** | Human- or policy-driven deterministic simulation with guarded commands, fault injection, shadow policies, and live safety evidence. |
+| **Replay** | Smooth browser-local playback of immutable runs with synchronized 3D, timeline, health, event, and KPI views. |
+| **Risk** | Bounded Monte Carlo analysis, convergence and sensitivity evidence, outlier triage, and deterministic sample materialization. |
+| **Compare** | Explicit event-time or mission-phase comparison across trajectories, KPIs, commands, policies, events, and safety behavior. |
+| **Review** | Attributed annotations, saved views, dispositions, immutable history, shareable run links, and versioned audit export. |
+
+Local development keeps the same application and storage interfaces while
+using filesystem bundles and optional SQLite-backed state. In Databricks,
+Replay and Risk read Delta through a SQL Warehouse, mutable collaboration state
+is stored in Lakebase, completed sessions are materialized by Jobs, and
+model/run lineage is recorded in MLflow.
+
 ## Current architecture
 
 The deterministic physics and safety core is portable Python and has no
@@ -80,6 +109,23 @@ boundaries, runtime flows, storage responsibilities, APIs, repository layout,
 deployment topology, and the documentation index.
 
 ## Deploying to Databricks
+
+This repository is already a Databricks Asset Bundle. Its entry point is
+[`databricks.yml`](databricks.yml), with resource declarations under
+[`resources/`](resources/). The bundle contains:
+
+- one Databricks App;
+- one Lakebase database instance and application database;
+- a SQL Warehouse resource binding;
+- simulation, Monte Carlo, completed-session materialization, and selected-risk-
+  sample materialization Jobs;
+- one MLflow experiment and a managed UC Volume for App-to-Job artifacts;
+- development and production targets, least-privilege App resource permissions,
+  bootstrap/grant scripts, and an end-to-end smoke gate.
+
+Required input is `warehouse_id`. Optional variables are `catalog`, `schema`,
+`session_artifact_volume`, `max_active_sessions`, and `max_owner_sessions`;
+their defaults are documented in [`databricks.yml`](databricks.yml).
 
 The bundle deploys to a development workspace with the following sequence. It
 requires the Databricks CLI, an authenticated profile, permission to deploy
@@ -119,6 +165,12 @@ databricks bundle run -t dev \
   --var="catalog=<catalog>,warehouse_id=<warehouse-id>" smoke
 ```
 
+The smoke gate verifies Delta replay, App/Lakebase health, annotation and saved-
+view persistence, review history and audit export, operational metrics, live
+session control, and asynchronous terminal-session materialization. A successful
+bundle validation proves configuration integrity; a deployment is accepted only
+after the smoke and rollback procedures pass in the selected workspace.
+
 The `catalog` variable must name a catalog you can grant on; `main` is the
 default. The App's service principal is created by `bundle deploy`, so `grant`
 must run after it. The App connects to Lakebase Postgres directly, so the
@@ -141,6 +193,14 @@ Start with:
 - [`docs/databricks_bundle.md`](docs/databricks_bundle.md) and
   [`docs/databricks_integration.md`](docs/databricks_integration.md) — workspace
   deployment and platform integration
+- [`docs/service_level_targets.md`](docs/service_level_targets.md) — published
+  latency, concurrency, recovery, and materialization targets
+- [`docs/operations_runbook.md`](docs/operations_runbook.md) — observability,
+  quotas, retention cleanup, and incident response
+- [`docs/security_access_review.md`](docs/security_access_review.md) — trust
+  boundaries, threat controls, and release access checklist
+- [`docs/deployment_rollback_acceptance.md`](docs/deployment_rollback_acceptance.md)
+  — deployment, migration, smoke, recovery, and rollback acceptance
 
 Phase 3 architecture and operating details are documented in
 `docs/phase_3_telemetry_replay_plan.md`, with machine-readable Lakehouse and
@@ -160,8 +220,9 @@ Lakebase-backed ownership, expiring control leases,
 idempotent commands, optimistic concurrency, versioned engine checkpoints,
 cross-instance restart recovery, asynchronous Delta materialization, and
 MLflow completion lineage are implemented behind the workspace smoke gate. The
-code-level Milestone 7 gates pass locally; each target workspace still runs the
-documented smoke and rollback exercise as release evidence.
+code-level Milestone 7 gates and DAB validation pass. Application deployment is
+workspace-specific: each target still requires its warehouse ID, grants,
+deployment, smoke run, and documented rollback exercise as release evidence.
 
 The DAB packages the Databricks App, Lakebase database, SQL warehouse binding,
 serverless simulation and Monte Carlo Jobs, MLflow experiment, and dev/prod
