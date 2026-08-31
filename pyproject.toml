@@ -20,7 +20,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = ["plotly>=6.0", "dash>=3.0"]
+# Flask/Werkzeug are pinned below the 3.1 line: Flask 3.1.x reads the request
+# context session as a raw attribute (ctx._session) during response processing,
+# which is not populated under the Databricks Apps request path and 500s every
+# response. 3.0.x uses the classic lazy session property and is fully supported
+# by Dash. Remove the pin once Databricks Apps is confirmed compatible with 3.1.
+ui = ["plotly>=6.0", "dash>=3.0", "flask>=3.0,<3.1", "werkzeug>=3.0,<3.1"]
 ml = ["scikit-learn>=1.5", "ruptures>=1.1.9", "torch>=2.4", "captum>=0.7"]
 storage = ["pyarrow>=17.0"]
 databricks = [

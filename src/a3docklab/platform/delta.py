@@ -318,15 +318,36 @@ class DeltaReplayStore:
     def __init__(self, catalog: DeltaCatalog, table_prefix: str = "a3docklab") -> None:
         self.catalog = catalog
         self.table_prefix = table_prefix
+        # Replay re-queries the same run many times as the playback clock advances.
+        # Each SQL Warehouse round trip costs seconds, so a full stream is fetched
+        # once and cached; per-frame windowing then happens in memory. Without this
+        # cache a single frame issues one query per stream and playback stalls.
+        self._runs_cache: list[BundleManifest] | None = None
+        self._stream_cache: dict[tuple[str, str], pd.DataFrame] = {}
 
     def _table(self, suffix: str) -> str:
         return f"{self.table_prefix}_{suffix}"
 
     def list_runs(self) -> list[BundleManifest]:
-        rows = self.catalog.read_table(self._table("runs"), order_by=("created_at_utc",))
-        return [
-            BundleManifest.model_validate_json(value) for value in rows.get("manifest_json", [])
-        ]
+        if self._runs_cache is None:
+            rows = self.catalog.read_table(self._table("runs"), order_by=("created_at_utc",))
+            self._runs_cache = [
+                BundleManifest.model_validate_json(value)
+                for value in rows.get("manifest_json", [])
+            ]
+        return self._runs_cache
+
+    def _full_stream(self, run_id: str, descriptor: StreamManifest) -> pd.DataFrame:
+        key = (run_id, descriptor.name)
+        cached = self._stream_cache.get(key)
+        if cached is None:
+            cached = self.catalog.read_table(
+                descriptor.path,
+                filters=(TableFilter("run_id", "eq", run_id),),
+                order_by=(descriptor.time_column,),
+            ).drop(columns="run_id", errors="ignore")
+            self._stream_cache[key] = cached
+        return cached
 
     def query_stream(
         self,
@@ -346,23 +367,19 @@ class DeltaReplayStore:
             raise KeyError(f"Unknown stream {stream!r}")
         if descriptor.row_count == 0:
             return pd.DataFrame(columns=columns)
-        filters = [TableFilter("run_id", "eq", run_id)]
+        time_column = descriptor.time_column
+        frame = self._full_stream(run_id, descriptor)
         if start_ns is not None:
-            filters.append(TableFilter(descriptor.time_column, "ge", start_ns))
+            frame = frame[frame[time_column] >= start_ns]
         if end_ns is not None:
-            filters.append(TableFilter(descriptor.time_column, "le", end_ns))
-        requested = None if columns is None else list(dict.fromkeys(["run_id", *columns]))
-        frame = self.catalog.read_table(
-            descriptor.path,
-            filters=tuple(filters),
-            columns=requested,
-            order_by=(descriptor.time_column,),
-        ).drop(columns="run_id", errors="ignore")
+            frame = frame[frame[time_column] <= end_ns]
+        if columns is not None:
+            frame = frame[[column for column in columns if column in frame.columns]]
         if max_points is not None and len(frame) > max_points:
             numeric = [
                 name
                 for name in frame.select_dtypes(include="number").columns
-                if name != descriptor.time_column
+                if name != time_column
             ]
             frame = decimate(frame, numeric[:3], max_points)
         return frame.reset_index(drop=True)
